@@ -8,7 +8,7 @@
 import math
 import torch
 
-from rsl_rl.modules.distribution import GaussianDistribution, HeteroscedasticGaussianDistribution
+from z_rl.modules.distribution import GaussianDistribution, HeteroscedasticGaussianDistribution
 
 
 class TestGaussianDistribution:
@@ -142,3 +142,4 @@ class TestHeteroscedasticGaussianDistribution:
         dim = 5
         dist = HeteroscedasticGaussianDistribution(output_dim=dim)
         assert dist.input_dim == [2, dim]
+

@@ -16,7 +16,7 @@ Workflow
 --------
 1. For new features, open an issue to discuss the proposed contribution.
 2. Fork the repository and implement the contribution.
-3. Add yourself to the `CONTRIBUTORS.md <https://github.com/leggedrobotics/rsl_rl/blob/main/CONTRIBUTORS.md>`_ file.
+3. Add yourself to the `CONTRIBUTORS.md <https://github.com/leggedrobotics/z_rl/blob/main/CONTRIBUTORS.md>`_ file.
 4. Run `pre-commit <https://pre-commit.com/>`_ to format and lint code with:
 
 .. code-block:: bash

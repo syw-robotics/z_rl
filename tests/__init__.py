@@ -3,4 +3,4 @@
 #
 # SPDX-License-Identifier: BSD-3-Clause
 
-"""Tests for rsl_rl."""
+"""Tests for z_rl."""

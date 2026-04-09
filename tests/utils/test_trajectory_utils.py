@@ -8,7 +8,7 @@
 import torch
 from tensordict import TensorDict
 
-from rsl_rl.utils import split_and_pad_trajectories, unpad_trajectories
+from z_rl.utils import split_and_pad_trajectories, unpad_trajectories
 
 
 class TestSplitAndPad:

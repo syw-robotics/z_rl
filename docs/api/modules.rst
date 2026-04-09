@@ -4,7 +4,7 @@ Modules
 MLP
 ---
 
-.. automodule:: rsl_rl.modules.mlp
+.. automodule:: z_rl.modules.mlp
    :members:
    :undoc-members:
 
@@ -12,7 +12,7 @@ MLP
 RNN
 ---
 
-.. automodule:: rsl_rl.modules.rnn
+.. automodule:: z_rl.modules.rnn
    :members:
    :undoc-members:
 
@@ -20,7 +20,7 @@ RNN
 CNN
 ---
 
-.. automodule:: rsl_rl.modules.cnn
+.. automodule:: z_rl.modules.cnn
    :members:
    :undoc-members:
 
@@ -28,7 +28,7 @@ CNN
 Normalization
 -------------
 
-.. automodule:: rsl_rl.modules.normalization
+.. automodule:: z_rl.modules.normalization
    :members:
    :undoc-members:
 
@@ -36,7 +36,7 @@ Normalization
 Distribution
 ------------
 
-.. automodule:: rsl_rl.modules.distribution
+.. automodule:: z_rl.modules.distribution
    :members:
    :undoc-members:
 

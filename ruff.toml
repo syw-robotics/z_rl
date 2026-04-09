@@ -61,4 +61,4 @@ extra-standard-library = [
     "git",
 ]
 # Imports from this repository
-known-first-party = ["rsl_rl"]
+known-first-party = ["z_rl"]

@@ -1,18 +1,18 @@
 Configuration
 =============
 
-RSL-RL is configured with a dictionary that is passed to RSL-RL's runner during initialization. The dictionary is
+Z-RL is configured with a dictionary that is passed to Z-RL's runner during initialization. The dictionary is
 usually read from a YAML file or constructed from Python dataclasses, such as in 
-`Isaac Lab <https://github.com/isaac-sim/IsaacLab/blob/main/source/isaaclab_rl/isaaclab_rl/rsl_rl/rl_cfg.py>`__. 
+`Isaac Lab <https://github.com/isaac-sim/IsaacLab/blob/main/source/isaaclab_rl/isaaclab_rl/z_rl/rl_cfg.py>`__. 
 It is nested to reflect the structure of the library, and follows this pattern:
 
-.. figure:: ../_static/rsl_rl_config_light.svg
+.. figure:: ../_static/z_rl_config_light.svg
    :width: 100%
    :align: center
    :class: light-only
 
 
-.. figure:: ../_static/rsl_rl_config_dark.svg
+.. figure:: ../_static/z_rl_config_dark.svg
    :width: 100%
    :align: center
    :class: dark-only
@@ -32,10 +32,10 @@ In the following sections, we list the available settings for each configuration
 Runner Configuration
 --------------------
 
-Currently, RSL-RL implements two runner classes:
-:class:`~rsl_rl.runners.on_policy_runner.OnPolicyRunner` and
-:class:`~rsl_rl.runners.distillation_runner.DistillationRunner`. The 
-:class:`~rsl_rl.runners.on_policy_runner.OnPolicyRunner` is configured as follows:
+Currently, Z-RL implements two runner classes:
+:class:`~z_rl.runners.on_policy_runner.OnPolicyRunner` and
+:class:`~z_rl.runners.distillation_runner.DistillationRunner`. The 
+:class:`~z_rl.runners.on_policy_runner.OnPolicyRunner` is configured as follows:
 
 .. list-table::
    :header-rows: 1
@@ -90,7 +90,7 @@ Currently, RSL-RL implements two runner classes:
      - required
      - Critic model configuration.
 
-For the :class:`~rsl_rl.runners.distillation_runner.DistillationRunner`, the ``actor`` and ``critic`` keys are simply
+For the :class:`~z_rl.runners.distillation_runner.DistillationRunner`, the ``actor`` and ``critic`` keys are simply
 replaced by ``student`` and ``teacher`` keys, respectively:
 
 .. list-table::
@@ -117,8 +117,8 @@ replaced by ``student`` and ``teacher`` keys, respectively:
 Algorithm Configuration
 -----------------------
 
-RSL-RL implements two algorithms, :class:`~rsl_rl.algorithms.ppo.PPO` and
-:class:`~rsl_rl.algorithms.distillation.Distillation`, which are configured as follows.
+Z-RL implements two algorithms, :class:`~z_rl.algorithms.ppo.PPO` and
+:class:`~z_rl.algorithms.distillation.Distillation`, which are configured as follows.
 
 PPO
 ^^^
@@ -138,7 +138,7 @@ PPO
    * - ``optimizer``
      - str
      - ``"adam"``
-     - Optimizer used for policy/value updates. Valid values: see :func:`~rsl_rl.utils.utils.resolve_optimizer`.
+     - Optimizer used for policy/value updates. Valid values: see :func:`~z_rl.utils.utils.resolve_optimizer`.
    * - ``learning_rate``
      - float
      - ``0.001``
@@ -195,11 +195,7 @@ PPO
      - bool
      - ``False``
      - Whether to share the CNN networks between actor and critic in case
-       the :class:`~rsl_rl.models.cnn_model.CNNModel` is used.
-   * - ``rnd_cfg``
-     - dict | None
-     - ``None``
-     - Optional RND extension configuration.
+       the :class:`~z_rl.models.cnn_model.CNNModel` is used.
    * - ``symmetry_cfg``
      - dict | None
      - ``None``
@@ -223,7 +219,7 @@ Distillation
    * - ``optimizer``
      - str
      - ``"adam"``
-     - Optimizer used for student updates. Valid values: see :func:`~rsl_rl.utils.utils.resolve_optimizer`.
+     - Optimizer used for student updates. Valid values: see :func:`~z_rl.utils.utils.resolve_optimizer`.
    * - ``learning_rate``
      - float
      - ``1e-3``
@@ -248,11 +244,11 @@ Distillation
 Model Configuration
 -------------------
 
-Different algorithms use models for different purposes. For example, :class:`~rsl_rl.algorithms.ppo.PPO` uses an actor
-and a critic, while :class:`~rsl_rl.algorithms.distillation.Distillation` uses a student and a teacher. Even though
-their function might be different, they can all use the same underlying model classes. RSL-RL currently implements
-three different models: :class:`~rsl_rl.models.mlp_model.MLPModel`, :class:`~rsl_rl.models.rnn_model.RNNModel`, and
-:class:`~rsl_rl.models.cnn_model.CNNModel`, which are configured as follows.
+Different algorithms use models for different purposes. For example, :class:`~z_rl.algorithms.ppo.PPO` uses an actor
+and a critic, while :class:`~z_rl.algorithms.distillation.Distillation` uses a student and a teacher. Even though
+their function might be different, they can all use the same underlying model classes. Z-RL currently implements
+three different models: :class:`~z_rl.models.mlp_model.MLPModel`, :class:`~z_rl.models.rnn_model.RNNModel`, and
+:class:`~z_rl.models.cnn_model.CNNModel`, which are configured as follows.
 
 MLPModel
 ^^^^^^^^
@@ -276,7 +272,7 @@ MLPModel
    * - ``activation``
      - str
      - ``"elu"``
-     - Activation function of the MLP. Valid values: see :func:`~rsl_rl.utils.utils.resolve_nn_activation`.
+     - Activation function of the MLP. Valid values: see :func:`~z_rl.utils.utils.resolve_nn_activation`.
    * - ``obs_normalization``
      - bool
      - ``False``
@@ -287,10 +283,10 @@ MLPModel
      - Optional output distribution configuration. If provided, the model can output stochastic values sampled from 
        the distribution.
 
-The  ``distribution_cfg`` dictionary contains all parameters required by a specific distribution. RSL-RL implements two
-distributions by default: A simple Gaussian distribution (:class:`~rsl_rl.modules.distribution.GaussianDistribution`) 
+The  ``distribution_cfg`` dictionary contains all parameters required by a specific distribution. Z-RL implements two
+distributions by default: A simple Gaussian distribution (:class:`~z_rl.modules.distribution.GaussianDistribution`) 
 and a Gaussian distribution with state-dependent standard deviation 
-(:class:`~rsl_rl.modules.distribution.HeteroscedasticGaussianDistribution`). Both require the same parameters:
+(:class:`~z_rl.modules.distribution.HeteroscedasticGaussianDistribution`). Both require the same parameters:
 
 .. list-table::
    :header-rows: 1
@@ -316,8 +312,8 @@ and a Gaussian distribution with state-dependent standard deviation
 RNNModel
 ^^^^^^^^
 
-The :class:`~rsl_rl.models.rnn_model.RNNModel` inherits from the :class:`~rsl_rl.models.mlp_model.MLPModel` and thus
-shares the same configuration keys as the :class:`~rsl_rl.models.mlp_model.MLPModel`, with the addition of the following 
+The :class:`~z_rl.models.rnn_model.RNNModel` inherits from the :class:`~z_rl.models.mlp_model.MLPModel` and thus
+shares the same configuration keys as the :class:`~z_rl.models.mlp_model.MLPModel`, with the addition of the following 
 keys:
 
 .. list-table::
@@ -352,8 +348,8 @@ keys:
 CNNModel
 ^^^^^^^^
 
-The :class:`~rsl_rl.models.cnn_model.CNNModel` inherits from the :class:`~rsl_rl.models.mlp_model.MLPModel` and thus
-shares the same configuration keys as the :class:`~rsl_rl.models.mlp_model.MLPModel`, with the addition of the following 
+The :class:`~z_rl.models.cnn_model.CNNModel` inherits from the :class:`~z_rl.models.mlp_model.MLPModel` and thus
+shares the same configuration keys as the :class:`~z_rl.models.mlp_model.MLPModel`, with the addition of the following 
 keys:
 
 .. list-table::
@@ -377,13 +373,13 @@ keys:
      - ``None``
      - Configuration of the CNN encoder(s).
 
-Instead of directly passing the CNN parameters to the :class:`~rsl_rl.models.cnn_model.CNNModel` (similar to how it is 
-done for the :class:`~rsl_rl.models.mlp_model.MLPModel` and :class:`~rsl_rl.models.rnn_model.RNNModel`), the parameters 
+Instead of directly passing the CNN parameters to the :class:`~z_rl.models.cnn_model.CNNModel` (similar to how it is 
+done for the :class:`~z_rl.models.mlp_model.MLPModel` and :class:`~z_rl.models.rnn_model.RNNModel`), the parameters 
 are grouped in a dictionary ``cnn_cfg``. This enables passing multiple CNN configurations for different observations 
 (e.g. different cameras). If only one CNN is needed or all CNNs have the same configuration, the dictionary may directly 
 contain the CNN parameters. If multiple CNNs with different configurations are needed, the dictionary must contain a 
 dictionary for each CNN configuration, with the key being the observation the configuration applies to. The 
-:class:`~rsl_rl.models.cnn_model.CNNModel` will then create CNNs based on the provided configurations. A CNN
+:class:`~z_rl.models.cnn_model.CNNModel` will then create CNNs based on the provided configurations. A CNN
 configuration includes the following parameters:
 
 .. list-table::
@@ -422,7 +418,7 @@ configuration includes the following parameters:
    * - ``activation``
      - str
      - ``"elu"``
-     - Activation function to use. Valid values: see :func:`~rsl_rl.utils.utils.resolve_nn_activation`.
+     - Activation function to use. Valid values: see :func:`~z_rl.utils.utils.resolve_nn_activation`.
    * - ``max_pool``
      - bool | tuple[bool] | list[bool]
      - ``False``
@@ -439,56 +435,8 @@ configuration includes the following parameters:
 Extension Configuration
 -----------------------
 
-RSL-RL currently features two extensions for :class:`~rsl_rl.algorithms.ppo.PPO`. Those are
-:class:`~rsl_rl.extensions.rnd.RandomNetworkDistillation` and :class:`Symmetry`, which may be configured as follows.
-
-Random Network Distillation
-^^^^^^^^^^^^^^^^^^^^^^^^^^^
-
-.. list-table::
-   :header-rows: 1
-   :class: no-wrap-type-column
-
-   * - Key
-     - Type
-     - Default
-     - Description
-   * - ``weight``
-     - float
-     - ``0.0``
-     - Initial weight of the RND reward.
-   * - ``weight_schedule``
-     - dict | None
-     - ``None``
-     - Weight schedule for the RND reward. Valid values: see :class:`~rsl_rl.extensions.rnd.RandomNetworkDistillation`.
-   * - ``learning_rate``
-     - float
-     - ``0.001``
-     - Learning rate for the RND optimizer.
-   * - ``predictor_hidden_dims``
-     - tuple[int] | list[int]
-     - required
-     - Hidden dimensions of the RND predictor network.
-   * - ``target_hidden_dims``
-     - tuple[int] | list[int]
-     - required
-     - Hidden dimensions of the RND target network.
-   * - ``num_outputs``
-     - int
-     - required
-     - Number of outputs of the RND networks.
-   * - ``activation``
-     - str
-     - ``"elu"``
-     - Activation function for the RND networks. Valid values: see :func:`~rsl_rl.utils.utils.resolve_nn_activation`.
-   * - ``state_normalization``
-     - bool
-     - ``False``
-     - Whether to normalize the RND state.
-   * - ``reward_normalization``
-     - bool
-     - ``False``
-     - Whether to normalize the RND reward.
+Z-RL currently features two extensions for :class:`~z_rl.algorithms.ppo.PPO`. Those are
+:class:`Symmetry`, which may be configured as follows.
 
 Symmetry Augmentation
 ^^^^^^^^^^^^^^^^^^^^^
@@ -508,7 +456,7 @@ Symmetry Augmentation
    * - ``data_augmentation_func``
      - str | callable | None
      - required
-     - Function to generate symmetric trajectories. Resolved using :func:`~rsl_rl.utils.utils.resolve_callable`.
+     - Function to generate symmetric trajectories. Resolved using :func:`~z_rl.utils.utils.resolve_callable`.
    * - ``use_mirror_loss``
      - bool
      - required
@@ -524,7 +472,7 @@ Example Configuration
 ---------------------
 
 While the previous sections make it seem rather complicated to set up a configuration, the required configuration to run 
-a training with, e.g., :class:`~rsl_rl.algorithms.ppo.PPO` is actually quite simple. The following configuration is
+a training with, e.g., :class:`~z_rl.algorithms.ppo.PPO` is actually quite simple. The following configuration is
 already sufficient:
 
 .. code-block:: yaml
@@ -547,16 +495,16 @@ already sufficient:
 Observation Configuration
 -------------------------
 
-RSL-RL expects the :func:`~rsl_rl.env.vec_env.VecEnv.step` method of the environment to return observations as a 
+Z-RL expects the :func:`~z_rl.env.vec_env.VecEnv.step` method of the environment to return observations as a 
 :class:`~tensordict.tensordict.TensorDict`. This dictionary contains one or more tensors with observation data, referred 
-to as *observation groups* in RSL-RL and Isaac Lab.
+to as *observation groups* in Z-RL and Isaac Lab.
 
 The ``obs_groups`` dictionary of the :ref:`runner configuration <runner-configuration>` defines which observation groups
 are used for which purpose. Each purpose defines its own *observation set*, which is simply a list of observation 
 groups. In other words, the ``obs_groups`` dictionary maps from *observation sets* to lists of *observation groups*.
 
 As the above definition is quite abstract, let's consider a simple example for a
-:class:`~rsl_rl.algorithms.ppo.PPO` training. The :func:`~rsl_rl.env.vec_env.VecEnv.step` method of our environment 
+:class:`~z_rl.algorithms.ppo.PPO` training. The :func:`~z_rl.env.vec_env.VecEnv.step` method of our environment 
 might return the following observations:
 
 .. code-block:: python
@@ -579,7 +527,7 @@ performance when passed to the critic. Thus, the ``obs_groups`` dictionary would
 With this configuration, the actor would receive the "policy" tensor as input, while the critic would receive both the 
 "policy" and the "privileged" tensor as input. 
 
-Depending on the algorithm and extensions used, RSL-RL expects different observation sets to be present in the 
+Depending on the algorithm and extensions used, Z-RL expects different observation sets to be present in the 
 ``obs_groups`` dictionary. Currently, the following observation sets may be required, depending on the configuration:
 
 .. list-table::
@@ -596,8 +544,6 @@ Depending on the algorithm and extensions used, RSL-RL expects different observa
      - Observations used as input to the student model.
    * - ``teacher``
      - Observations used as input to the teacher model.
-   * - ``rnd_state``
-     - Observations used as input to the RND extension.
 
-Incomplete or incorrect configurations are handled in :func:`~rsl_rl.utils.utils.resolve_obs_groups`, which provides 
+Incomplete or incorrect configurations are handled in :func:`~z_rl.utils.utils.resolve_obs_groups`, which provides 
 detailed information on how errors are resolved.

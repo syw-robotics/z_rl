@@ -14,13 +14,20 @@ from tensordict import TensorDict
 import onnx
 import pytest
 
-from rsl_rl.models import MLPModel
+from z_rl.models import MLPModel
+from z_rl.models.mixins.encoder import EncoderMixin
 from tests.conftest import make_obs
 
 NUM_ENVS = 4
 OBS_DIM = 8
 NUM_ACTIONS = 4
 OBS_GROUPS = {"actor": ["policy"], "critic": ["policy"]}
+
+
+class EncodedMLPModel(EncoderMixin, MLPModel):
+    """Test helper model that injects an encoder branch into MLPModel."""
+
+    pass
 
 
 def _make_mlp_model(stochastic: bool = False, obs_set: str = "actor", **kwargs: object) -> tuple[MLPModel, TensorDict]:
@@ -134,6 +141,61 @@ class TestObsGroupConcatenation:
         latent_ba = model_ba.get_latent(obs)
 
         assert not torch.allclose(latent_ab, latent_ba), "Different obs group orders should produce different latents"
+
+
+class TestEncoderMixin:
+    """Tests for encoder-based latent construction."""
+
+    def test_encoder_replaces_selected_obs_groups(self) -> None:
+        """Selected observation groups should be replaced by the encoder output in the latent."""
+        obs = TensorDict(
+            {
+                "group_a": torch.ones(2, 3),
+                "group_b": torch.ones(2, 2) * 2,
+                "group_c": torch.ones(2, 4) * 3,
+            },
+            batch_size=[2],
+        )
+        model = EncodedMLPModel(
+            obs,
+            {"actor": ["group_a", "group_b", "group_c"]},
+            "actor",
+            1,
+            hidden_dims=[8],
+            encoder_obs_group="group_b",
+            encoder_output_dim=5,
+            encoder_hidden_dims=[7],
+        )
+
+        latent = model.get_latent(obs)
+        encoded = model.encoder(obs["group_b"])
+
+        assert latent.shape == (2, 12)
+        assert torch.allclose(latent[:, :3], obs["group_a"])
+        assert torch.allclose(latent[:, 3:8], encoded)
+        assert torch.allclose(latent[:, 8:], obs["group_c"])
+
+    def test_encoder_obs_groups_must_belong_to_obs_set(self) -> None:
+        """Encoder observation groups must be part of the selected observation set."""
+        obs = TensorDict(
+            {
+                "group_a": torch.ones(2, 3),
+                "group_b": torch.ones(2, 2),
+            },
+            batch_size=[2],
+        )
+
+        with pytest.raises(ValueError, match="part of obs_groups"):
+            EncodedMLPModel(
+                obs,
+                {"actor": ["group_a"]},
+                "actor",
+                1,
+                hidden_dims=[8],
+                encoder_obs_group="group_b",
+                encoder_output_dim=4,
+                encoder_hidden_dims=[6],
+            )
 
 
 class TestMLPModelExport:

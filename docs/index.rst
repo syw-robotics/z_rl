@@ -1,4 +1,4 @@
-RSL-RL Documentation
+Z-RL Documentation
 ====================
 
 .. toctree::
@@ -30,12 +30,12 @@ RSL-RL Documentation
    :hidden:
    :caption: Project Links
 
-   GitHub Repository <https://github.com/leggedrobotics/rsl_rl>
-   PyPI Package <https://pypi.org/project/rsl-rl-lib/>
+   GitHub Repository <https://github.com/leggedrobotics/z_rl>
+   PyPI Package <https://pypi.org/project/z-rl-lib/>
 
-**RSL-RL** is a GPU-accelerated, lightweight learning library for robotics research. It's compact design allows 
-researchers to prototype and test new ideas without the overhead of modifying large, complex libraries. RSL-RL can also 
-be used out-of-the-box by installing it via `PyPI <https://pypi.org/project/rsl-rl-lib/>`_, supports multi-GPU training 
+**Z-RL** is a GPU-accelerated, lightweight learning library for robotics research. It's compact design allows 
+researchers to prototype and test new ideas without the overhead of modifying large, complex libraries. Z-RL can also 
+be used out-of-the-box by installing it via `PyPI <https://pypi.org/project/z-rl-lib/>`_, supports multi-GPU training 
 and features common algorithms for robot learning.
 
 Key Features
@@ -49,7 +49,7 @@ Key Features
 Learning Environments
 ---------------------
 
-RSL-RL is currently used by the following robot learning libraries:
+Z-RL is currently used by the following robot learning libraries:
 
 - `Isaac Lab <https://github.com/isaac-sim/IsaacLab>`_ (built on top of NVIDIA Isaac Sim)
 - `Legged Gym <https://github.com/leggedrobotics/legged_gym>`_ (built on top of NVIDIA Isaac Gym)
@@ -59,12 +59,12 @@ RSL-RL is currently used by the following robot learning libraries:
 Citation
 --------
 
-If you use RSL-RL in your research, please cite the `paper <https://arxiv.org/abs/2509.10771>`_:
+If you use Z-RL in your research, please cite the `paper <https://arxiv.org/abs/2509.10771>`_:
 
 .. code-block:: text
 
-   @article{schwarke2025rslrl,
-     title={RSL-RL: A Learning Library for Robotics Research},
+   @article{schwarke2025zrl,
+     title={Z-RL: A Learning Library for Robotics Research},
      author={Schwarke, Clemens and Mittal, Mayank and Rudin, Nikita and Hoeller, David and Hutter, Marco},
      journal={arXiv preprint arXiv:2509.10771},
      year={2025}

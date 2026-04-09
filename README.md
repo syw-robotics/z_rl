@@ -1,55 +1,72 @@
-# RSL-RL
+# Z-RL
 
-**RSL-RL** is a GPU-accelerated, lightweight learning library for robotics research. Its compact design allows
-researchers to prototype and test new ideas without the overhead of modifying large, complex libraries. RSL-RL can also
-be used out-of-the-box by installing it via [PyPI](https://pypi.org/project/rsl-rl-lib/), supports multi-GPU training,
-and features common algorithms for robot learning.
+**Z-RL** is a lightweight reinforcement learning infrastructure derived from [RSL-RL](https://github.com/leggedrobotics/rsl_rl), redesigned for faster iteration in robotics projects.
+
+`Z` is the last letter of the alphabet, we hope Z-RL is your **last** time deeply touching RL infra code.  
+Users may implement mixins externally through Z-RL's plugin system, thereby not modifying the source code.
 
 ## Key Features
 
-- **Minimal, readable codebase** with clear extension points for rapid prototyping.
-- **Robotics-first methods** including PPO and Student-Teacher Distillation.
-- **High-throughput training** with native Multi-GPU support.
-- **Proven performance** in numerous research publications.
+Compared with plain RSL-RL style usage, Z-RL emphasizes:
 
-## Learning Environments
-
-RSL-RL is currently used by the following robot learning libraries:
-
-- [Isaac Lab](https://github.com/isaac-sim/IsaacLab) (built on top of NVIDIA Isaac Sim)
-- [Legged Gym](https://github.com/leggedrobotics/legged_gym) (built on top of NVIDIA Isaac Gym)
-- [mjlab](https://github.com/mujocolab/mjlab) (built on top of MuJoCo Warp)
-- [MuJoCo Playground](https://github.com/google-deepmind/mujoco_playground) (built on top of MuJoCo MJX and Warp)
+- **Mixin-first design** for cleaner extension points in algorithms and models.
+- **Plugin system** so project-specific logic can live outside the core library.
+- **Adaptor layer** for environment integration, currently including IsaacLab `ManagerBasedRLEnv` support.
 
 ## Installation
 
-Before installing RSL-RL, ensure that Python `3.9+` is available. It is recommended to install the library in a virtual
-environment (e.g. using `venv` or `conda`), which is often already created by the used environment library (e.g.
-Isaac Lab). If so, make sure to activate it before installing RSL-RL.
+Before installing Z-RL, make sure Python `3.9+` is available.
 
-### Installing RSL-RL as a dependency
+It is recommended to use a virtual environment (`venv`, `conda`, or `uv`) and activate it first.
 
-```bash
-pip install rsl-rl-lib
-```
-
-### Installing RSL-RL for development
+### Install from PyPI
 
 ```bash
-git clone https://github.com/leggedrobotics/rsl_rl
-cd rsl_rl
-pip install -e .
+pip install z-rl-lib
 ```
 
-## Citation
+### Install for development
 
-If you use RSL-RL in your research, please cite the [paper](https://arxiv.org/abs/2509.10771):
-
-```text
-@article{schwarke2025rslrl,
-  title={RSL-RL: A Learning Library for Robotics Research},
-  author={Schwarke, Clemens and Mittal, Mayank and Rudin, Nikita and Hoeller, David and Hutter, Marco},
-  journal={arXiv preprint arXiv:2509.10771},
-  year={2025}
-}
+```bash
+git clone https://github.com/syw-robotics/z_rl
+cd z_rl
+python -m pip install -e .
 ```
+
+## Usage
+
+For IsaacLab integration details, see:
+
+- `z_rl/adaptor/isaaclab/README.md`
+- `z_rl/adaptor/isaaclab/README.zh.md`
+
+## Plugin System
+
+Z-RL supports **external plugin packages** so your custom algorithms/models/modules stay isolated from upstream core code.
+
+### Generate a plugin template
+
+After installing Z-RL, run:
+
+```bash
+z-rl-plugin-init
+
+# z-rl-plugin-init --path ./my_zrl_plugin --name z_rl_plugin_example
+```
+
+This creates a minimal package scaffold containing:
+
+- custom algorithm mixin example (`MyPPO`)
+- custom model mixin examples
+- plugin-side IsaacLab config classes (`rl_cfg.py`)
+
+Implement your mixins, then install your plugin in editable mode:
+
+```bash
+cd my_zrl_plugin
+uv pip install -e .
+```
+
+## License
+
+BSD-3-Clause. See [LICENSE](LICENSE).

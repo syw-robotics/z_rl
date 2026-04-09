@@ -4,7 +4,7 @@ Runners
 On-Policy Runner
 ----------------
 
-.. automodule:: rsl_rl.runners.on_policy_runner
+.. automodule:: z_rl.runners.on_policy_runner
    :members:
    :undoc-members:
 
@@ -12,7 +12,7 @@ On-Policy Runner
 Distillation Runner
 -------------------
 
-.. automodule:: rsl_rl.runners.distillation_runner
+.. automodule:: z_rl.runners.distillation_runner
    :members:
    :undoc-members:
 

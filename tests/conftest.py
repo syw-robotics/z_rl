@@ -3,7 +3,7 @@
 #
 # SPDX-License-Identifier: BSD-3-Clause
 
-"""Shared test fixtures for rsl_rl tests."""
+"""Shared test fixtures for z_rl tests."""
 
 import torch
 from tensordict import TensorDict

@@ -3,7 +3,7 @@
 #
 # SPDX-License-Identifier: BSD-3-Clause
 
-"""Sphinx configuration for the RSL-RL documentation."""
+"""Sphinx configuration for the Z-RL documentation."""
 
 from __future__ import annotations
 
@@ -14,10 +14,10 @@ import sys
 sys.path.insert(0, os.path.abspath(".."))
 
 # Project information
-project = "RSL-RL"
-author = "The RSL-RL Developers"
+project = "Z-RL"
+author = "The Z-RL Developers"
 copyright = "2021-2026, ETH Zurich and NVIDIA CORPORATION"
-html_title = "RSL-RL"
+html_title = "Z-RL"
 
 # Extensions
 extensions = [
@@ -37,8 +37,8 @@ html_theme = "furo"
 html_css_files = ["custom.css"]
 html_theme_options = {
     "sidebar_hide_name": True,
-    "light_logo": "rsl_rl_logo_light.svg",
-    "dark_logo": "rsl_rl_logo_dark.svg",
+    "light_logo": "z_rl_logo_light.svg",
+    "dark_logo": "z_rl_logo_dark.svg",
     "light_css_variables": {
         "color-highlight-on-target": "rgba(12, 121, 190, 0.5)",
     },

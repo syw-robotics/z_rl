@@ -12,8 +12,8 @@ import tempfile
 import torch
 from tensordict import TensorDict
 
-from rsl_rl.env import VecEnv
-from rsl_rl.runners import OnPolicyRunner
+from z_rl.env import VecEnv
+from z_rl.runners import OnPolicyRunner
 
 NUM_ENVS = 4
 OBS_DIM = 8

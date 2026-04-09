@@ -10,7 +10,7 @@ from tensordict import TensorDict
 
 import pytest
 
-from rsl_rl.storage import RolloutStorage
+from z_rl.storage import RolloutStorage
 from tests.conftest import make_obs
 
 NUM_ENVS = 6

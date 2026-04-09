@@ -1,7 +1,7 @@
 Storage
 =======
 
-.. automodule:: rsl_rl.storage.rollout_storage
+.. automodule:: z_rl.storage.rollout_storage
    :members:
    :undoc-members:
 

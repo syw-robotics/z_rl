@@ -4,7 +4,7 @@ Utils
 Logger
 ------
 
-.. automodule:: rsl_rl.utils.logger
+.. automodule:: z_rl.utils.logger
    :members:
    :undoc-members:
 
@@ -12,7 +12,7 @@ Logger
 Utils
 -----
 
-.. automodule:: rsl_rl.utils.utils
+.. automodule:: z_rl.utils.utils
    :members:
    :undoc-members:
 
@@ -20,7 +20,7 @@ Utils
 Wandb Utils
 -----------
 
-.. automodule:: rsl_rl.utils.wandb_utils
+.. automodule:: z_rl.utils.wandb_utils
    :members:
    :undoc-members:
 
@@ -28,7 +28,7 @@ Wandb Utils
 Neptune Utils
 -------------
 
-.. automodule:: rsl_rl.utils.neptune_utils
+.. automodule:: z_rl.utils.neptune_utils
    :members:
    :undoc-members:
 

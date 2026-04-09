@@ -4,7 +4,7 @@ Algorithms
 PPO
 ---
 
-.. automodule:: rsl_rl.algorithms.ppo
+.. automodule:: z_rl.algorithms.ppo
    :members:
    :undoc-members:
 
@@ -12,7 +12,7 @@ PPO
 Distillation
 ------------
 
-.. automodule:: rsl_rl.algorithms.distillation
+.. automodule:: z_rl.algorithms.distillation
    :members:
    :undoc-members:
 

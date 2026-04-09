@@ -3,18 +3,18 @@ requires = ["setuptools>=61.0", "wheel"]
 build-backend = "setuptools.build_meta"
 
 [project]
-name = "rsl-rl-lib"
-version = "5.0.1"
+name = "z_rl"
+version = "0.0.1"
 keywords = ["reinforcement-learning", "robotics"]
 maintainers = [
-  { name="Clemens Schwarke", email="cschwarke@ethz.ch" },
-  { name="Mayank Mittal", email="mittalma@ethz.ch" },
+  { name="Siyuan Wang", email="syw@mail.sustech.edu.cn" },
 ]
 authors = [
-  { name="Clemens Schwarke", email="cschwarke@ethz.ch" },
-  { name="Mayank Mittal", email="mittalma@ethz.ch" },
-  { name="Nikita Rudin", email="rudinn@ethz.ch" },
-  { name="David Hoeller", email="holler.david78@gmail.com" },
+  { name="Clemens Schwarke (RSL-RL)", email="cschwarke@ethz.ch" },
+  { name="Mayank Mittal (RSL-RL)", email="mittalma@ethz.ch" },
+  { name="Nikita Rudin (RSL-RL)", email="rudinn@ethz.ch" },
+  { name="David Hoeller (RSL-RL)", email="holler.david78@gmail.com" },
+  { name="Siyuan Wang", email="syw@mail.sustech.edu.cn" },
 ]
 description = "Fast and simple RL algorithms implemented in PyTorch"
 readme = { file = "README.md", content-type = "text/markdown" }
@@ -35,12 +35,15 @@ dependencies = [
 ]
 
 [project.urls]
-Homepage = "https://github.com/leggedrobotics/rsl_rl"
-Issues = "https://github.com/leggedrobotics/rsl_rl/issues"
+Homepage = "https://github.com/syw-robotics/z_rl"
+Issues = "https://github.com/syw-robotics/z_rl/issues"
+
+[project.scripts]
+z-rl-plugin-init = "z_rl.cli.plugin_template:main"
 
 [tool.setuptools.packages.find]
 where = ["."]
-include = ["rsl_rl*"]
+include = ["z_rl*", "adaptor*"]
 
 [tool.setuptools]
 license-files = [
@@ -49,7 +52,7 @@ license-files = [
 ]
 
 [tool.pyright]
-include = ["rsl_rl"]
+include = ["z_rl"]
 typeCheckingMode = "basic"
 pythonVersion = "3.9"
 pythonPlatform = "Linux"

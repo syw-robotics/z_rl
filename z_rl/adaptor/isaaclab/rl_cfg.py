@@ -151,8 +151,25 @@ class ZRlCNNModelCfg(ZRlMLPModelCfg):
         flatten: bool = True
         """Whether to flatten the output of the CNN. Defaults to True."""
 
+    @configclass
+    class CNNProjectionCfg:
+        hidden_dims: tuple[int] | list[int] = ()
+        """Optional hidden dimensions of the post-CNN projection MLP."""
+
+        output_dim: int = MISSING
+        """Output dimension of the post-CNN projection MLP."""
+
+        activation: str = "elu"
+        """The activation function for the post-CNN projection MLP."""
+
+        last_activation: str | None = None
+        """Optional last activation for the post-CNN projection MLP."""
+
     cnn_cfg: CNNCfg = MISSING
     """The configuration for the CNN(s)."""
+
+    cnn_projection_cfg: CNNProjectionCfg | None = None
+    """Optional configuration for a projection MLP applied after flattened CNN features."""
 
 
 ############################

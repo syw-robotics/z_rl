@@ -8,6 +8,7 @@
 from .mlp_model import MLPModel
 from .moe_model import MoEModel
 from .rnn_model import RNNModel
+from .cnn_model import CNNModel
 
 from .mixins import MLPEncoderMixin 
 
@@ -28,6 +29,7 @@ __all__ = [
     "MLPModel",
     "MoEModel",
     "RNNModel",
+    "CNNModel",
     "MLPEncoderMLPModel",
     "MLPEncoderMoEModel",
 ]

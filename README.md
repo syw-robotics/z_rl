@@ -1,15 +1,14 @@
 # Z-RL
 
-**Z-RL** is a lightweight reinforcement learning infrastructure derived from [RSL-RL](https://github.com/leggedrobotics/rsl_rl), redesigned for faster iteration in robotics projects.
+**Z-RL** is a lightweight reinforcement learning infrastructure derived from [RSL-RL](https://github.com/leggedrobotics/rsl_rl), redesigned for faster iteration in robotics projects (only supports IsaacLab's manager based rl env currently).
 
-`Z` is the last letter of the alphabet, we hope Z-RL is your **last** time deeply touching RL infra code.  
-Users may implement mixins externally through Z-RL's plugin system, thereby not modifying the source code.
+`Z` is the last letter of the alphabet, we hope Z-RL is your **last** time dedicatedly reviewing RL infra code.  
 
 ## Key Features
 
 Compared with plain RSL-RL style usage, Z-RL emphasizes:
 
-- **Mixin-first design** for cleaner extension points in algorithms and models.
+- **Mixin-first design** for cleaner implementation in algorithms and models.
 - **Plugin system** so project-specific logic can live outside the core library.
 - **Adaptor layer** for environment integration, currently including IsaacLab `ManagerBasedRLEnv` support.
 
@@ -19,14 +18,6 @@ Before installing Z-RL, make sure Python `3.9+` is available.
 
 It is recommended to use a virtual environment (`venv`, `conda`, or `uv`) and activate it first.
 
-### Install from PyPI
-
-```bash
-pip install z-rl-lib
-```
-
-### Install for development
-
 ```bash
 git clone https://github.com/syw-robotics/z_rl
 cd z_rl
@@ -35,10 +26,11 @@ python -m pip install -e .
 
 ## Usage
 
-For IsaacLab integration details, see:
+For detailed module guides, see:
 
-- `z_rl/adaptor/isaaclab/README.md`
-- `z_rl/adaptor/isaaclab/README.zh.md`
+- [IsaacLab adaptor README](z_rl/adaptor/isaaclab/README.md)
+- [Algorithms README](z_rl/algorithms/README.md)
+- [Models README](z_rl/models/README.md)
 
 ## Plugin System
 

@@ -10,7 +10,7 @@ from .moe_model import MoEModel
 from .rnn_model import RNNModel
 from .cnn_model import CNNModel
 
-from .mixins import MLPEncoderMixin 
+from .mixins import MLPEncoderMixin, MoEHeadMixin
 
 
 class MLPEncoderMLPModel(MLPEncoderMixin, MLPModel):
@@ -28,6 +28,7 @@ class MLPEncoderMoEModel(MLPEncoderMixin, MoEModel):
 __all__ = [
     "MLPModel",
     "MoEModel",
+    "MoEHeadMixin",
     "RNNModel",
     "CNNModel",
     "MLPEncoderMLPModel",

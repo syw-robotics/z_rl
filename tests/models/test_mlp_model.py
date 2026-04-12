@@ -15,7 +15,7 @@ import onnx
 import pytest
 
 from z_rl.models import MLPModel
-from z_rl.models.mixins.encoder import EncoderMixin
+from z_rl.models.mixins import MLPEncoderMixin
 from tests.conftest import make_obs
 
 NUM_ENVS = 4
@@ -24,7 +24,7 @@ NUM_ACTIONS = 4
 OBS_GROUPS = {"actor": ["policy"], "critic": ["policy"]}
 
 
-class EncodedMLPModel(EncoderMixin, MLPModel):
+class EncodedMLPModel(MLPEncoderMixin, MLPModel):
     """Test helper model that injects an encoder branch into MLPModel."""
 
     pass
@@ -79,7 +79,7 @@ class TestMLPModelModes:
 
         output = critic(obs)
         latent = critic.get_latent(obs)
-        expected = critic.mlp(latent)
+        expected = critic.head(latent)
         assert torch.allclose(output, expected)
 
 
@@ -146,53 +146,59 @@ class TestObsGroupConcatenation:
 class TestEncoderMixin:
     """Tests for encoder-based latent construction."""
 
-    def test_encoder_replaces_selected_obs_groups(self) -> None:
-        """Selected observation groups should be replaced by the encoder output in the latent."""
-        obs = TensorDict(
-            {
-                "group_a": torch.ones(2, 3),
-                "group_b": torch.ones(2, 2) * 2,
-                "group_c": torch.ones(2, 4) * 3,
-            },
-            batch_size=[2],
-        )
+    def test_encoder_replaces_policy_latent(self) -> None:
+        """The latent adapter should replace the normalized policy latent with the encoder output."""
+        obs = TensorDict({"policy": torch.ones(2, 8) * 2}, batch_size=[2])
         model = EncodedMLPModel(
             obs,
-            {"actor": ["group_a", "group_b", "group_c"]},
+            {"actor": ["policy"]},
             "actor",
             1,
             hidden_dims=[8],
-            encoder_obs_group="group_b",
             encoder_output_dim=5,
             encoder_hidden_dims=[7],
         )
 
         latent = model.get_latent(obs)
-        encoded = model.encoder(obs["group_b"])
+        encoded = model.encoder(obs["policy"])
 
-        assert latent.shape == (2, 12)
-        assert torch.allclose(latent[:, :3], obs["group_a"])
-        assert torch.allclose(latent[:, 3:8], encoded)
-        assert torch.allclose(latent[:, 8:], obs["group_c"])
+        assert latent.shape == (2, 5)
+        assert torch.allclose(latent, encoded)
 
-    def test_encoder_obs_groups_must_belong_to_obs_set(self) -> None:
-        """Encoder observation groups must be part of the selected observation set."""
-        obs = TensorDict(
-            {
-                "group_a": torch.ones(2, 3),
-                "group_b": torch.ones(2, 2),
-            },
-            batch_size=[2],
+    def test_encoder_can_append_last_policy_obs(self) -> None:
+        """The latent adapter should append the last policy frame when configured."""
+        obs = TensorDict({"policy": torch.arange(16, dtype=torch.float32).view(2, 8)}, batch_size=[2])
+        time_slice_map = {"policy": {"last": slice(6, 8)}}
+        model = EncodedMLPModel(
+            obs,
+            {"actor": ["policy"]},
+            "actor",
+            1,
+            hidden_dims=[8],
+            encoder_output_dim=5,
+            encoder_hidden_dims=[7],
+            concat_policy_last_obs=True,
+            obs_group_time_slice_map=time_slice_map,
         )
 
-        with pytest.raises(ValueError, match="part of obs_groups"):
+        latent = model.get_latent(obs)
+        encoded = model.encoder(obs["policy"])
+
+        assert latent.shape == (2, 7)
+        assert torch.allclose(latent[:, :5], encoded)
+        assert torch.allclose(latent[:, 5:], obs["policy"][:, 6:8])
+
+    def test_encoder_requires_policy_only_obs_group(self) -> None:
+        """Encoder mixins should reject non-policy or multi-group observation sets."""
+        obs = TensorDict({"group_a": torch.ones(2, 3), "policy": torch.ones(2, 2)}, batch_size=[2])
+
+        with pytest.raises(ValueError, match="exactly one active observation group named 'policy'"):
             EncodedMLPModel(
                 obs,
-                {"actor": ["group_a"]},
+                {"actor": ["group_a", "policy"]},
                 "actor",
                 1,
                 hidden_dims=[8],
-                encoder_obs_group="group_b",
                 encoder_output_dim=4,
                 encoder_hidden_dims=[6],
             )
@@ -231,6 +237,35 @@ class TestMLPModelExport:
 
         obs_concat = torch.cat([obs[g] for g in model.obs_groups], dim=-1)
         original_output = model(obs)
+        jit_output = jit_model(obs_concat)
+
+        assert torch.allclose(original_output, jit_output, atol=1e-5)
+
+    def test_jit_export_with_encoder_mixin(self) -> None:
+        """JIT export should preserve latent adapters installed by encoder mixins."""
+        obs = make_obs(NUM_ENVS, OBS_DIM)
+        model = EncodedMLPModel(
+            obs,
+            OBS_GROUPS,
+            "actor",
+            NUM_ACTIONS,
+            hidden_dims=[32, 32],
+            distribution_cfg={
+                "class_name": "GaussianDistribution",
+                "init_std": 1.0,
+                "std_type": "scalar",
+            },
+            encoder_output_dim=6,
+            encoder_hidden_dims=[12],
+            concat_policy_last_obs=True,
+            obs_group_time_slice_map={"policy": {"last": slice(6, 8)}},
+        )
+        model.eval()
+
+        original_output = model(obs).detach()
+
+        jit_model = torch.jit.script(model.as_jit())
+        obs_concat = torch.cat([obs[g] for g in model.obs_groups], dim=-1)
         jit_output = jit_model(obs_concat)
 
         assert torch.allclose(original_output, jit_output, atol=1e-5)
@@ -276,6 +311,45 @@ class TestMLPModelExport:
             model.update_normalization(shifted_obs)
 
         model.eval()
+        onnx_model = model.as_onnx(verbose=False)
+        onnx_model.eval()
+
+        with tempfile.NamedTemporaryFile(suffix=".onnx") as f:
+            torch.onnx.export(
+                onnx_model,
+                onnx_model.get_dummy_inputs(),
+                f.name,
+                export_params=True,
+                opset_version=18,
+                input_names=onnx_model.input_names,
+                output_names=onnx_model.output_names,
+            )
+            loaded = onnx.load(f.name)
+            onnx.checker.check_model(loaded)
+
+    @pytest.mark.filterwarnings("ignore:.*legacy TorchScript.*:DeprecationWarning")
+    @pytest.mark.filterwarnings("ignore:.*will be removed.*:DeprecationWarning")
+    def test_onnx_export_with_encoder_mixin(self) -> None:
+        """ONNX export should include encoder-mixin latent adapters without custom wrappers."""
+        obs = make_obs(NUM_ENVS, OBS_DIM)
+        model = EncodedMLPModel(
+            obs,
+            OBS_GROUPS,
+            "actor",
+            NUM_ACTIONS,
+            hidden_dims=[32, 32],
+            distribution_cfg={
+                "class_name": "GaussianDistribution",
+                "init_std": 1.0,
+                "std_type": "scalar",
+            },
+            encoder_output_dim=6,
+            encoder_hidden_dims=[12],
+            concat_policy_last_obs=True,
+            obs_group_time_slice_map={"policy": {"last": slice(6, 8)}},
+        )
+        model.eval()
+
         onnx_model = model.as_onnx(verbose=False)
         onnx_model.eval()
 

@@ -69,6 +69,7 @@ class MLPModel(nn.Module):
             self.obs_normalizer = EmpiricalNormalization(self.obs_dim)
         else:
             self.obs_normalizer = torch.nn.Identity()
+        self.latent_adapter = _IdentityLatentAdapter()
 
         # Distribution
         if distribution_cfg is not None:
@@ -80,7 +81,7 @@ class MLPModel(nn.Module):
             mlp_output_dim = output_dim
 
         # Output MLP head
-        self.head = MLP(self._get_latent_dim(), mlp_output_dim, hidden_dims, activation)
+        self.head = MLP(self.get_latent_dim(), mlp_output_dim, hidden_dims, activation)
 
         # Initialize distribution-specific MLP weights
         if self.distribution is not None:
@@ -120,18 +121,10 @@ class MLPModel(nn.Module):
         """Build the model latent by concatenating and normalizing selected observation groups."""
         # Select and concatenate observations
         obs_list = [obs[obs_group] for obs_group in self.obs_groups]
-        latent = torch.cat(obs_list, dim=-1)
+        obs_tensor = torch.cat(obs_list, dim=-1)
         # Normalize observations
-        latent = self.obs_normalizer(latent)
-
-        # Example: append the last history frame of a specific obs group to latent.
-        # group_name = "policy"
-        # if group_name in self.obs_group_time_slice_map:
-        #     from z_rl.utils import get_obs_time_slice
-        #     last_obs = get_obs_time_slice(obs[group_name], group_name, "last", self.obs_group_time_slice_map)
-        #     latent = torch.cat([latent, last_obs], dim=-1)
-
-        return latent
+        normalized_obs_tensor = self.obs_normalizer(obs_tensor)
+        return self.latent_adapter(normalized_obs_tensor)
 
     def reset(self, dones: torch.Tensor | None = None, hidden_state: HiddenState = None) -> None:
         """Reset the internal state for recurrent models (no-op)."""
@@ -204,14 +197,22 @@ class MLPModel(nn.Module):
             obs_dim += obs[obs_group].shape[-1]
         return active_obs_groups, obs_dim
 
-    def _get_latent_dim(self) -> int:
-        """Return the latent dimensionality consumed by the MLP head."""
+    def get_latent_dim(self) -> int:
+        """Return the latent dimensionality consumed by the model head."""
         return self.obs_dim
 
 
 """
 Export Utils
 """
+
+
+class _IdentityLatentAdapter(nn.Module):
+    """Default latent adapter that preserves the normalized latent."""
+
+    def forward(self, x: torch.Tensor) -> torch.Tensor:
+        """Return the normalized latent unchanged."""
+        return x
 
 
 class _TorchMLPModel(nn.Module):
@@ -221,7 +222,8 @@ class _TorchMLPModel(nn.Module):
         """Create a TorchScript-friendly copy of an MLPModel."""
         super().__init__()
         self.obs_normalizer = copy.deepcopy(model.obs_normalizer)
-        self.head = copy.deepcopy(model.mlp)
+        self.latent_adapter = copy.deepcopy(model.latent_adapter)
+        self.head = copy.deepcopy(model.head)
         if model.distribution is not None:
             self.deterministic_output = model.distribution.as_deterministic_output_module()
         else:
@@ -229,8 +231,9 @@ class _TorchMLPModel(nn.Module):
 
     def forward(self, x: torch.Tensor) -> torch.Tensor:
         """Run deterministic inference on pre-concatenated observations."""
-        x = self.obs_normalizer(x)
-        out = self.head(x)
+        normalized_x = self.obs_normalizer(x)
+        latent = self.latent_adapter(normalized_x)
+        out = self.head(latent)
         return self.deterministic_output(out)
 
     @torch.jit.export
@@ -249,7 +252,8 @@ class _OnnxMLPModel(nn.Module):
         super().__init__()
         self.verbose = verbose
         self.obs_normalizer = copy.deepcopy(model.obs_normalizer)
-        self.head = copy.deepcopy(model.mlp)
+        self.latent_adapter = copy.deepcopy(model.latent_adapter)
+        self.head = copy.deepcopy(model.head)
         if model.distribution is not None:
             self.deterministic_output = model.distribution.as_deterministic_output_module()
         else:
@@ -258,8 +262,9 @@ class _OnnxMLPModel(nn.Module):
 
     def forward(self, x: torch.Tensor) -> torch.Tensor:
         """Run deterministic inference for ONNX export."""
-        x = self.obs_normalizer(x)
-        out = self.head(x)
+        normalized_x = self.obs_normalizer(x)
+        latent = self.latent_adapter(normalized_x)
+        out = self.head(latent)
         return self.deterministic_output(out)
 
     def get_dummy_inputs(self) -> tuple[torch.Tensor]:

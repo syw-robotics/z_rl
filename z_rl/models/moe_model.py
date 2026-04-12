@@ -8,11 +8,11 @@ from __future__ import annotations
 
 from tensordict import TensorDict
 
+from z_rl.models.mixins.head_mixin import MoEHeadMixin
 from z_rl.models.mlp_model import MLPModel
-from z_rl.modules import MoE
 
 
-class MoEModel(MLPModel):
+class MoEModel(MoEHeadMixin, MLPModel):
     """MLPModel variant whose head is a Mixture-of-Experts MLP.
 
     Data flow: ``obs groups -> (per-group normalization) -> concat latent -> MoE head -> (distribution) -> output``.
@@ -59,19 +59,7 @@ class MoEModel(MLPModel):
             distribution_cfg=distribution_cfg,
         )
 
-        mlp_output_dim = self.distribution.input_dim if self.distribution is not None else output_dim
-
-        # Output MLP MoE head
-        self.head = MoE(
-            self._get_latent_dim(),
-            mlp_output_dim,
-            num_experts,
-            expert_hidden_dims,
-            gate_hidden_dims=gate_hidden_dims,
-            activation=activation,
-        )
-        self.mlp = self.head
-
-        # Keep distribution-specific head initialization behavior (e.g., heteroscedastic std head init) per expert.
-        if self.distribution is not None:
-            self.head.init_distribution_heads(self.distribution)
+        self.num_experts = num_experts
+        self.expert_hidden_dims = expert_hidden_dims
+        self.gate_hidden_dims = gate_hidden_dims
+        self.init_moe_head(output_dim, activation)

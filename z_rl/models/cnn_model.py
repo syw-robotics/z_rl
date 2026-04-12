@@ -177,8 +177,8 @@ class CNNModel(MLPModel):
         # Return active 1D observation groups and dimension for parent class
         return obs_groups_1d, obs_dim_1d
 
-    def _get_latent_dim(self) -> int:
-        """Return the latent dimensionality consumed by the MLP head."""
+    def get_latent_dim(self) -> int:
+        """Return the latent dimensionality consumed by the model head."""
         return self.obs_dim + self.cnn_latent_dim
 
     def _build_cnn_projectors(
@@ -247,7 +247,7 @@ class _TorchCNNModel(nn.Module):
         # Convert ModuleDict to ModuleList for ordered iteration
         self.cnns = nn.ModuleList([copy.deepcopy(model.cnns[g]) for g in model.obs_groups_2d])
         self.cnn_projectors = nn.ModuleList([copy.deepcopy(model.cnn_projectors[g]) for g in model.obs_groups_2d])
-        self.mlp = copy.deepcopy(model.head)
+        self.head = copy.deepcopy(model.head)
         if model.distribution is not None:
             self.deterministic_output = model.distribution.as_deterministic_output_module()
         else:
@@ -264,7 +264,7 @@ class _TorchCNNModel(nn.Module):
         latent_cnn = torch.cat(latent_cnn_list, dim=-1)
         latent = torch.cat([latent_1d, latent_cnn], dim=-1)
 
-        out = self.mlp(latent)
+        out = self.head(latent)
         return self.deterministic_output(out)
 
     @torch.jit.export
@@ -284,7 +284,7 @@ class _OnnxCNNModel(nn.Module):
         # Convert ModuleDict to ModuleList for ordered iteration
         self.cnns = nn.ModuleList([copy.deepcopy(model.cnns[g]) for g in model.obs_groups_2d])
         self.cnn_projectors = nn.ModuleList([copy.deepcopy(model.cnn_projectors[g]) for g in model.obs_groups_2d])
-        self.mlp = copy.deepcopy(model.head)
+        self.head = copy.deepcopy(model.head)
         if model.distribution is not None:
             self.deterministic_output = model.distribution.as_deterministic_output_module()
         else:
@@ -306,7 +306,7 @@ class _OnnxCNNModel(nn.Module):
         latent_cnn = torch.cat(latent_cnn_list, dim=-1)
         latent = torch.cat([latent_1d, latent_cnn], dim=-1)
 
-        out = self.mlp(latent)
+        out = self.head(latent)
         return self.deterministic_output(out)
 
     def get_dummy_inputs(self) -> tuple[torch.Tensor, ...]:

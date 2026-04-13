@@ -195,7 +195,7 @@ Incompatible group result:
 
 - the wrapper silently falls back to `term_major` for that group
 
-## Time slicing with `get_obs_time_slice()`
+## Time slicing with cached selectors
 
 The wrapper can precompute efficient selectors for compatible groups:
 
@@ -203,10 +203,13 @@ The wrapper can precompute efficient selectors for compatible groups:
 - `"exclude_last"`
 - `"exclude_first"`
 
-This is exposed through:
+Use the cached selector metadata exposed by the wrapper together with the utility helpers:
 
 ```python
-last_obs = env.get_obs_time_slice(obs["policy"], "policy", "last")
+from z_rl.utils import resolve_obs_time_selector, select_obs_time_slice
+
+last_selector = resolve_obs_time_selector("policy", "last", env.obs_group_time_slice_map)
+last_obs = select_obs_time_slice(obs["policy"], last_selector)
 ```
 
 This is only available for groups where:
@@ -226,7 +229,7 @@ Useful properties:
 - `obs_group_layout_mode_map`
   - actual layout used per group: `"term_major"` or `"history_major"`
 - `obs_group_time_slice_map`
-  - cached selectors used by `get_obs_time_slice()`
+  - cached selectors used by `resolve_obs_time_selector()` and `select_obs_time_slice()`
 
 These properties are useful when model code needs to know how a flattened vector was assembled.
 

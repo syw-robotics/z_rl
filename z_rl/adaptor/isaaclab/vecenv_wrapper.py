@@ -18,9 +18,6 @@ class ZRlVecEnvWrapper(VecEnv):
         This class must be the last wrapper in the wrapper chain. This is because the wrapper does not follow
         the :class:`gym.Wrapper` interface. Any subsequent wrappers will need to be modified to work with this
         wrapper.
-
-    Reference:
-        https://github.com/leggedrobotics/z_rl/blob/master/z_rl/env/vec_env.py
     """
 
     def __init__(

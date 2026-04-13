@@ -7,26 +7,36 @@
 
 from .utils import (
     check_nan,
-    get_obs_time_slice,
+    get_obs_component,
+    get_obs_time_selector_dim,
+    resolve_obs_component_selector,
+    resolve_obs_time_selector,
     inject_obs_time_slice_map,
     get_param,
     resolve_callable,
     resolve_nn_activation,
     resolve_obs_groups,
     resolve_optimizer,
+    select_obs_component,
+    select_obs_time_slice,
     split_and_pad_trajectories,
     unpad_trajectories,
 )
 
 __all__ = [
     "check_nan",
-    "get_obs_time_slice",
+    "get_obs_component",
+    "get_obs_time_selector_dim",
+    "resolve_obs_component_selector",
+    "resolve_obs_time_selector",
     "inject_obs_time_slice_map",
     "get_param",
     "resolve_callable",
     "resolve_nn_activation",
     "resolve_obs_groups",
     "resolve_optimizer",
+    "select_obs_component",
+    "select_obs_time_slice",
     "split_and_pad_trajectories",
     "unpad_trajectories",
 ]

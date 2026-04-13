@@ -141,7 +141,7 @@ class _BatchedMLPExperts(nn.Module):
     @torch.no_grad()
     def init_distribution_heads(self, distribution: nn.Module) -> None:
         """Apply distribution-specific initialization to all expert output heads."""
-        # Keep behavior aligned with HeteroscedasticGaussianDistribution.init_mlp_weights.
+        # Keep behavior aligned with HeteroscedasticGaussianDistribution.init_head_weights.
         if type(distribution).__name__ != "HeteroscedasticGaussianDistribution":
             return
 

@@ -113,6 +113,26 @@ class ZRlMoEModelCfg:
 
 
 @configclass
+class ZRlEncoderMLPModelCfg(ZRlMLPModelCfg):
+    """Configuration for encoder-based MLP model."""
+
+    class_name: str = "EncoderMLPModel"
+    """The model class name. Defaults to EncoderMLPModel."""
+
+    latent_dim: int = 128
+    """The latent dimension produced by the encoder branch."""
+
+    encoder_hidden_dims: list[int] = MISSING
+    """The hidden dimensions of the encoder MLP."""
+
+    encoder_activation: str = "elu"
+    """The activation function for the encoder MLP. Defaults to elu."""
+
+    concat_last_obs: bool = False
+    """Whether to concatenate the last observation frame to the encoder latent. Defaults to False."""
+
+
+@configclass
 class ZRlCNNModelCfg(ZRlMLPModelCfg):
     """Configuration for CNN model."""
 
@@ -235,6 +255,29 @@ class ZRlPpoAlgorithmCfg:
 
     symmetry_cfg: ZRlSymmetryCfg | None = None
     """The symmetry configuration. Defaults to None, in which case symmetry is not used."""
+
+
+@configclass
+class ZRlEncoderEstimationPpoAlgorithmCfg(ZRlPpoAlgorithmCfg):
+    """Configuration for the encoder-estimation PPO algorithm variant."""
+
+    class_name: str = "EncoderEstimationPPO"
+    """The algorithm class name. Defaults to EncoderEstimationPPO."""
+
+    estimation_loss_coef: float = 1.0
+    """The coefficient for the auxiliary estimation loss."""
+
+    obs_group_name: str = "critic"
+    """The observation group used as the estimation target source."""
+
+    term_name: str = "base_lin_vel"
+    """The observation term selected from ``obs_group_name`` as the estimation target."""
+
+    latent_selector: slice = slice(0, 3)
+    """The actor latent slice used for the auxiliary estimation loss."""
+
+    loss_name: str = "estimation_loss"
+    """The optimization loss key emitted by the encoder-estimation loss spec."""
 
 
 #########################

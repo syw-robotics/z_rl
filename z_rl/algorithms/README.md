@@ -1,6 +1,6 @@
 # Algorithms
 
-This directory contains the learning algorithms used by Z-RL and the PPO mixin hook used to extend PPO with custom
+This directory contains the learning algorithms used by Z-RL and the explicit extension API used to add custom PPO
 loss terms.
 
 ## Overview
@@ -9,10 +9,13 @@ The core algorithm classes are:
 
 - `PPO`: on-policy reinforcement learning with actor/critic models and rollout-based updates.
 - `Distillation`: behavior-cloning style training where a student model learns to match a teacher model.
+- `EncoderEstimationPPO`: `ComposablePPO` preset with encoder-latent estimation enabled.
 
-The extension hook lives in `mixins/`:
+The preferred explicit extension path is now the composition API:
 
-- `BasePPOMixin`: helper mixin that lets subclasses inject extra PPO losses without rewriting the base PPO update loop.
+- `composition/composable_ppo.py`: shared PPO builder plus thin subclass that applies configured loss specs
+- `composition/specs.py`: contract for extra optimization or logging terms
+- `variants/`: concrete algorithm variants and their variant-specific loss specs
 
 ## Current Structure
 
@@ -97,20 +100,26 @@ Algorithm-specific behavior:
 - `PPO` resolves symmetry configuration and may share CNN encoders from actor to critic
 - `Distillation` forbids symmetry extensions and builds separate `student` / `teacher` models
 
-## PPO Mixin Design
+## PPO Extension Design
 
-`BasePPOMixin` is the intended extension point for algorithm-side customization.
+`ComposablePPO` is the intended extension point for algorithm-side customization.
 
-Typical composition order is:
+Preferred extension is explicit:
 
 ```python
-class MyAlgo(MyPPOMixin, PPO):
-    pass
+from z_rl.algorithms.composition import ComposablePPO, PPOLossSpec
+
+
+class MyPPO(ComposablePPO):
+    @classmethod
+    def build_loss_spec(cls, env, algorithm_cfg) -> PPOLossSpec:
+        return MyAuxLossSpec(...)
 ```
 
-Override:
+The variant-owned loss spec implements:
 
-- `compute_additional_loss(minibatch)`
+- `validate(algo)`
+- `compute(algo, minibatch)`
 
 Return:
 
@@ -122,17 +131,32 @@ Important contract:
 - keys in `opt_losses` are weighted in `PPO.update()` by an attribute named `<key>_coef` if it exists
 - custom loss keys must not collide with base PPO keys such as `surrogate_loss`, `value_loss`, or `entropy`
 
+This keeps the extension surface local to the actual customization and avoids requiring users to reason about multiple
+inheritance order.
+
+When creating a new PPO variant, the intended workflow is:
+
+- implement a `PPOLossSpec`
+- subclass `ComposablePPO`
+- override `build_loss_spec(env, algorithm_cfg)`
+- keep variant-specific spec classes in the same file as the variant unless they are shared across multiple variants
+
+The shared `ComposablePPO.construct_algorithm(...)` builder handles actor/critic/storage assembly so variants do not
+need to duplicate PPO construction boilerplate.
+
 ## Reference Implementations
 
 Use these files as the canonical examples:
 
 - `ppo.py`: base PPO training loop, KL scheduling, symmetry integration, and checkpoint I/O
+- `composition/composable_ppo.py`: shared composition builder for PPO variants
+- `composition/specs.py`: contract for PPO loss extensions
+- `variants/encoder_estimation_ppo.py`: predefined algorithm variant and its `EncoderEstimationLossSpec`
 - `distillation.py`: student/teacher distillation loop with gradient accumulation
-- `mixins/ppo_mixin.py`: the intended PPO extension pattern
 
 ## Maintenance Notes
 
 - Keep runner-facing method names aligned across algorithms so config-driven construction stays predictable.
-- Prefer extending PPO through `BasePPOMixin` instead of copying the whole class.
+- Prefer extending PPO through `ComposablePPO` and `PPOLossSpec` instead of copying the whole class.
 - If algorithm checkpoint keys change, update both this README and any runner or plugin template code that depends on
   them.

@@ -30,39 +30,119 @@ def get_param(param: Any, idx: int) -> Any:
         return param
 
 
-def get_obs_time_slice(
-    obs: torch.Tensor,
+def resolve_obs_time_selector(
     obs_group_name: str,
     selector: str,
     obs_group_time_slice_map: dict[str, dict[str, slice | torch.Tensor]],
-) -> torch.Tensor:
-    """Return a cached time-slice for a concatenated vector observation group.
+) -> slice | torch.Tensor:
+    """Resolve the cached selector metadata for a vector observation group.
 
-    Args:
-        obs: Concatenated observation tensor for one observation group, shape ``[N, D]``.
-        obs_group_name: Observation group key in ``obs_group_time_slice_map``.
-        selector: One of ``"last"``, ``"exclude_last"``, ``"exclude_first"``.
-        obs_group_time_slice_map: Cached selector metadata keyed by group and selector.
-
-    Returns:
-        The selected observation slice.
-
-    Raises:
-        ValueError: If group or selector is not configured.
+    This helper is intended for cold paths. Call it once during module initialization
+    and reuse the returned selector in hot inference or training loops.
     """
-    if obs_group_name not in obs_group_time_slice_map:
-        raise ValueError(
-            f"Observation group '{obs_group_name}' is not configured for time slicing."
-            " Ensure the group has history enabled and all terms share the same history length."
-        )
-    if selector not in ("last", "exclude_last", "exclude_first"):
-        raise ValueError(
-            f"Unsupported selector '{selector}'. Supported selectors are: 'last', 'exclude_last', 'exclude_first'."
-        )
-    selector_meta = obs_group_time_slice_map[obs_group_name][selector]
+    return obs_group_time_slice_map[obs_group_name][selector]
+
+
+def select_obs_time_slice(obs: torch.Tensor, selector_meta: slice | torch.Tensor) -> torch.Tensor:
+    """Select a time slice from a concatenated observation using pre-resolved selector metadata.
+
+    This helper avoids repeated dictionary lookups and string dispatch in hot paths.
+    """
     if isinstance(selector_meta, slice):
         return obs[:, selector_meta]
     return obs.index_select(dim=1, index=selector_meta)
+
+
+def get_obs_time_selector_dim(selector_meta: slice | torch.Tensor, input_dim: int) -> int:
+    """Return the feature dimension addressed by cached selector metadata."""
+    if isinstance(selector_meta, slice):
+        start, stop, step = selector_meta.indices(input_dim)
+        return len(range(start, stop, step))
+    return int(selector_meta.numel())
+
+
+def resolve_obs_component_selector(
+    obs_group_name: str,
+    term_name: str,
+    obs_format: dict[str, dict[str, tuple[int, ...]]],
+    obs_group_layout_mode_map: dict[str, str],
+    frame: str = "last",
+) -> slice | torch.Tensor:
+    """Resolve selector metadata for one vector observation term in a concatenated observation group."""
+    if frame not in ("last", "all"):
+        raise ValueError(f"Unsupported frame '{frame}'. Supported values are: 'last', 'all'.")
+
+    term_formats = obs_format[obs_group_name]
+    term_format = term_formats[term_name]
+    history_length = term_format[0]
+    frame_shape = term_format[1:]
+    if len(frame_shape) != 1:
+        raise ValueError(
+            f"Observation term '{obs_group_name}/{term_name}' must be vector-valued, got single-frame shape {frame_shape}."
+        )
+
+    frame_dim = frame_shape[0]
+    effective_history_length = history_length if history_length > 0 else 1
+    layout_mode = obs_group_layout_mode_map[obs_group_name]
+
+    if layout_mode == "term_major":
+        offset = 0
+        for name, fmt in term_formats.items():
+            current_history_length = fmt[0] if fmt[0] > 0 else 1
+            current_width = current_history_length * fmt[1]
+            if name == term_name:
+                if frame == "all" or history_length == 0:
+                    return slice(offset, offset + current_width)
+                return slice(offset + current_width - frame_dim, offset + current_width)
+            offset += current_width
+        raise ValueError(f"Observation term '{term_name}' not found in group '{obs_group_name}'.")
+
+    if layout_mode != "history_major":
+        raise ValueError(f"Unsupported layout mode '{layout_mode}' for group '{obs_group_name}'.")
+
+    group_frame_dim = sum(fmt[1] for fmt in term_formats.values())
+    frame_offset = 0
+    for name, fmt in term_formats.items():
+        if name == term_name:
+            break
+        frame_offset += fmt[1]
+    else:
+        raise ValueError(f"Observation term '{term_name}' not found in group '{obs_group_name}'.")
+
+    if frame == "last" or history_length == 0:
+        group_dim = effective_history_length * group_frame_dim
+        start = group_dim - group_frame_dim + frame_offset
+        return slice(start, start + frame_dim)
+
+    indices = []
+    for frame_idx in range(effective_history_length):
+        start = frame_idx * group_frame_dim + frame_offset
+        indices.extend(range(start, start + frame_dim))
+    return torch.tensor(indices, dtype=torch.long)
+
+
+def select_obs_component(obs: torch.Tensor, selector_meta: slice | torch.Tensor) -> torch.Tensor:
+    """Select a resolved observation component from a concatenated observation tensor."""
+    return select_obs_time_slice(obs, selector_meta)
+
+
+def get_obs_component(
+    obs: torch.Tensor,
+    obs_group_name: str,
+    term_name: str,
+    obs_format: dict[str, dict[str, tuple[int, ...]]],
+    obs_group_layout_mode_map: dict[str, str],
+    frame: str = "last",
+) -> torch.Tensor:
+    """Resolve and select one vector observation term from a concatenated observation group."""
+    selector_meta = resolve_obs_component_selector(
+        obs_group_name=obs_group_name,
+        term_name=term_name,
+        obs_format=obs_format,
+        obs_group_layout_mode_map=obs_group_layout_mode_map,
+        frame=frame,
+    )
+    return select_obs_component(obs, selector_meta)
 
 
 def inject_obs_time_slice_map(model_cfg: dict, model_class: type, env: Any) -> None:

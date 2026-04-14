@@ -4,7 +4,7 @@ build-backend = "setuptools.build_meta"
 
 [project]
 name = "z_rl"
-version = "0.0.1"
+version = "0.0.2"
 keywords = ["reinforcement-learning", "robotics"]
 maintainers = [
   { name="Siyuan Wang", email="syw@mail.sustech.edu.cn" },

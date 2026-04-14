@@ -5,10 +5,11 @@
 
 import gymnasium as gym
 import torch
-from z_rl.env import VecEnv
 from tensordict import TensorDict
 
 from isaaclab.envs import ManagerBasedRLEnv
+from z_rl.env import VecEnv
+from z_rl.utils import ObsSelector
 
 
 class ZRlVecEnvWrapper(VecEnv):
@@ -18,9 +19,6 @@ class ZRlVecEnvWrapper(VecEnv):
         This class must be the last wrapper in the wrapper chain. This is because the wrapper does not follow
         the :class:`gym.Wrapper` interface. Any subsequent wrappers will need to be modified to work with this
         wrapper.
-
-    Reference:
-        https://github.com/leggedrobotics/z_rl/blob/master/z_rl/env/vec_env.py
     """
 
     def __init__(
@@ -79,7 +77,7 @@ class ZRlVecEnvWrapper(VecEnv):
         self._obs_group_layout_mode_map = self._create_obs_group_layout_mode_map()
         self._obs_group_term_order_map = self._create_obs_group_term_order_map()
         self._obs_group_concatenate_dim_map = self._create_obs_group_concatenate_dim_map()
-        self._dict_obs_group_names = self._create_dict_obs_group_names()
+        self._dict_obs_group_names = self._create_dict_obs_group_names()  # check for dict obs (when concatenate_terms is False)
         self._history_major_group_history_length_map = self._create_history_major_group_history_length_map()
         self._obs_group_time_slice_map = self._create_obs_group_time_slice_map()
 
@@ -165,7 +163,7 @@ class ZRlVecEnvWrapper(VecEnv):
         return self._obs_group_layout_mode_map
 
     @property
-    def obs_group_time_slice_map(self) -> dict[str, dict[str, slice | torch.Tensor]]:
+    def obs_group_time_slice_map(self) -> dict[str, dict[str, ObsSelector]]:
         """The cached time-slice selectors for compatible observation groups."""
         return self._obs_group_time_slice_map
 
@@ -232,7 +230,7 @@ class ZRlVecEnvWrapper(VecEnv):
             for group_name in obs_manager.active_terms
         }
 
-    def _create_obs_group_time_slice_map(self) -> dict[str, dict[str, slice | torch.Tensor]]:
+    def _create_obs_group_time_slice_map(self) -> dict[str, dict[str, ObsSelector]]:
         """Creates cached group-level time slices for concatenated vector observation groups."""
         obs_manager = self.unwrapped.observation_manager
         obs_group_time_slice_map = {}
@@ -288,10 +286,6 @@ class ZRlVecEnvWrapper(VecEnv):
         """Checks whether an observation group supports cached time slicing."""
         group_dim = obs_manager.group_obs_dim[group_name]
         term_formats = self._obs_format[group_name]
-        history_lengths = {term_format[0] for term_format in term_formats.values()}
-        # Require all terms to have the same non-zero history length.
-        if 0 in history_lengths or len(history_lengths) != 1:
-            return False
 
         if obs_manager.group_obs_concatenate[group_name]:
             # Concatenated groups must already be flat vectors.
@@ -319,19 +313,23 @@ class ZRlVecEnvWrapper(VecEnv):
             return "history_major"
         return "term_major"
 
-    def _build_obs_group_time_slices(self, group_name: str, layout_mode: str) -> dict[str, slice | torch.Tensor]:
+    def _build_obs_group_time_slices(self, group_name: str, layout_mode: str) -> dict[str, ObsSelector]:
         """Builds cached time-slice selectors for a validated observation group."""
         term_formats = self._obs_format[group_name]
         common_history_length = next(iter({term_format[0] for term_format in term_formats.values()}))
+        common_history_length = max(common_history_length, 1)
+
+        # For history_major, use contiguous slices
         if layout_mode == "history_major":
             frame_dim = sum(term_format[1] for term_format in term_formats.values())
             group_dim = common_history_length * frame_dim
             return {
-                "last": slice(group_dim - frame_dim, group_dim),
-                "exclude_last": slice(0, group_dim - frame_dim),
-                "exclude_first": slice(frame_dim, group_dim),
+                "last": ObsSelector(slice(group_dim - frame_dim, group_dim)),
+                "exclude_last": ObsSelector(slice(0, group_dim - frame_dim)),
+                "exclude_first": ObsSelector(slice(frame_dim, group_dim)),
             }
 
+        # For term_major, use descrete index tensor
         flat_offset = 0
         last_indices = []
         exclude_last_indices = []
@@ -350,15 +348,17 @@ class ZRlVecEnvWrapper(VecEnv):
             flat_offset += common_history_length * frame_dim
 
         return {
-            "last": torch.tensor(last_indices, device=self.device, dtype=torch.long),
-            "exclude_last": torch.tensor(exclude_last_indices, device=self.device, dtype=torch.long),
-            "exclude_first": torch.tensor(exclude_first_indices, device=self.device, dtype=torch.long),
+            "last": ObsSelector(torch.tensor(last_indices, device=self.device, dtype=torch.long)),
+            "exclude_last": ObsSelector(torch.tensor(exclude_last_indices, device=self.device, dtype=torch.long)),
+            "exclude_first": ObsSelector(torch.tensor(exclude_first_indices, device=self.device, dtype=torch.long)),
         }
 
     def _process_obs_groups(self, obs_dict: dict) -> dict:
         """Converts dict-based observation groups into tensors using the configured layout."""
+        # if no dict obs groups, return the original obs dict
         if not self._dict_obs_group_names:
             return obs_dict
+        # otherwise, concatenate them into tensors according to a configured layout (term-major or history-major)
         processed_obs_dict = obs_dict.copy()
         for group_name in self._dict_obs_group_names:
             processed_obs_dict[group_name] = self._concatenate_obs_group(group_name, processed_obs_dict[group_name])

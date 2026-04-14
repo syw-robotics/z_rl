@@ -5,32 +5,18 @@
 
 """Neural models for the learning algorithm."""
 
+from .composition import ComposableModel
 from .mlp_model import MLPModel
-from .moe_model import MoEModel
+from .variants import EncoderMLPModel, MoEModel
 from .rnn_model import RNNModel
 from .cnn_model import CNNModel
-
-from .mixins import MLPEncoderMixin, MoEHeadMixin
-
-
-class MLPEncoderMLPModel(MLPEncoderMixin, MLPModel):
-    """MLP model composed with :class:`MLPEncoderMixin`."""
-
-    pass
-
-
-class MLPEncoderMoEModel(MLPEncoderMixin, MoEModel):
-    """MoE model composed with :class:`MLPEncoderMixin`."""
-
-    pass
 
 
 __all__ = [
     "MLPModel",
+    "ComposableModel",
+    "EncoderMLPModel",
     "MoEModel",
-    "MoEHeadMixin",
     "RNNModel",
     "CNNModel",
-    "MLPEncoderMLPModel",
-    "MLPEncoderMoEModel",
 ]

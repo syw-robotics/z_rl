@@ -13,7 +13,7 @@ from tensordict import TensorDict
 
 from z_rl.modules import MLP, EmpiricalNormalization, HiddenState
 from z_rl.modules.distribution import Distribution
-from z_rl.utils import resolve_callable, unpad_trajectories
+from z_rl.utils import ObsSelector, resolve_callable, unpad_trajectories
 
 
 class MLPModel(nn.Module):
@@ -39,7 +39,7 @@ class MLPModel(nn.Module):
         activation: str = "elu",
         obs_normalization: bool = False,
         distribution_cfg: dict | None = None,
-        obs_group_time_slice_map: dict[str, dict[str, slice | torch.Tensor]] | None = None,
+        obs_group_time_slice_map: dict[str, dict[str, ObsSelector]] | None = None,
     ) -> None:
         """Initialize the MLP-based model.
 
@@ -57,35 +57,11 @@ class MLPModel(nn.Module):
         """
         super().__init__()
 
-        # Resolve observation groups and dimensions
-        self.obs_groups, self.obs_dim = self._get_obs_dim(obs, obs_groups, obs_set)
-
-        # Optional metadata for custom model mixins that need history slicing.
-        self.obs_group_time_slice_map = obs_group_time_slice_map or {}
-
-        # Observation normalization
-        self.obs_normalization = obs_normalization
-        if obs_normalization:
-            self.obs_normalizer = EmpiricalNormalization(self.obs_dim)
-        else:
-            self.obs_normalizer = torch.nn.Identity()
-        self.latent_adapter = _IdentityLatentAdapter()
-
-        # Distribution
-        if distribution_cfg is not None:
-            dist_class: type[Distribution] = resolve_callable(distribution_cfg.pop("class_name"))  # type: ignore
-            self.distribution: Distribution | None = dist_class(output_dim, **distribution_cfg)
-            mlp_output_dim = self.distribution.input_dim
-        else:
-            self.distribution = None
-            mlp_output_dim = output_dim
-
-        # Output MLP head
-        self.head = MLP(self.get_latent_dim(), mlp_output_dim, hidden_dims, activation)
-
-        # Initialize distribution-specific MLP weights
-        if self.distribution is not None:
-            self.distribution.init_mlp_weights(self.head)
+        self._init_observation_pipeline(obs, obs_groups, obs_set, obs_normalization, obs_group_time_slice_map)
+        self.distribution, head_output_dim = self._build_distribution(output_dim, distribution_cfg)
+        self.latent_adapter = self.build_latent_adapter()
+        self.head = self.build_head(self.get_latent_dim(), head_output_dim, hidden_dims, activation)
+        self.init_head_weights()
 
     def forward(
         self,
@@ -200,6 +176,53 @@ class MLPModel(nn.Module):
     def get_latent_dim(self) -> int:
         """Return the latent dimensionality consumed by the model head."""
         return self.obs_dim
+
+    def _init_observation_pipeline(
+        self,
+        obs: TensorDict,
+        obs_groups: dict[str, list[str]],
+        obs_set: str,
+        obs_normalization: bool,
+        obs_group_time_slice_map: dict[str, dict[str, ObsSelector]] | None,
+    ) -> None:
+        """Resolve observation metadata and build the normalization stage."""
+        self.obs_groups, self.obs_dim = self._get_obs_dim(obs, obs_groups, obs_set)
+        self.obs_group_time_slice_map = obs_group_time_slice_map or {}
+        self.obs_normalization = obs_normalization
+        self.obs_normalizer = self._build_obs_normalizer(obs_normalization)
+
+    def _build_obs_normalizer(self, obs_normalization: bool) -> nn.Module:
+        """Build the observation normalizer used before latent construction."""
+        if obs_normalization:
+            return EmpiricalNormalization(self.obs_dim)
+        return torch.nn.Identity()
+
+    def _build_distribution(
+        self, output_dim: int, distribution_cfg: dict | None
+    ) -> tuple[Distribution | None, int | list[int]]:
+        """Build the optional output distribution and return its required head output dimension."""
+        if distribution_cfg is None:
+            return None, output_dim
+
+        dist_cfg = dict(distribution_cfg)
+        dist_class: type[Distribution] = resolve_callable(dist_cfg.pop("class_name"))  # type: ignore
+        distribution = dist_class(output_dim, **dist_cfg)
+        return distribution, distribution.input_dim
+
+    def build_latent_adapter(self) -> nn.Module:
+        """Build the latent adapter applied after observation normalization."""
+        return _IdentityLatentAdapter()
+
+    def build_head(
+        self, input_dim: int, output_dim: int | list[int], hidden_dims: tuple[int, ...] | list[int], activation: str
+    ) -> nn.Module:
+        """Build the output head that consumes the model latent."""
+        return MLP(input_dim, output_dim, hidden_dims, activation)
+
+    def init_head_weights(self) -> None:
+        """Initialize distribution-specific head weights after head construction."""
+        if self.distribution is not None:
+            self.distribution.init_head_weights(self.head)
 
 
 """

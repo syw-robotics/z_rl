@@ -5,7 +5,15 @@
 
 """Learning algorithms."""
 
-from .distillation import Distillation
+from .variants import EncoderEstimationPPO
 from .ppo import PPO
+from .composition import ComposablePPO
+from .distillation import Distillation
 
-__all__ = ["PPO", "Distillation"]
+
+__all__ = [
+    "PPO",
+    "Distillation",
+    "ComposablePPO",
+    "EncoderEstimationPPO",
+]

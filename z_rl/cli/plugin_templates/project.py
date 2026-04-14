@@ -24,6 +24,12 @@ uv pip install -e .
 ├── modules
 └── rl_cfg.py
 ```
+
+The generated algorithm template follows the current `ComposablePPO` pattern:
+
+- define a `PPOLossSpec`
+- subclass `ComposablePPO`
+- override `build_loss_spec(env, algorithm_cfg)`
 """
 
 

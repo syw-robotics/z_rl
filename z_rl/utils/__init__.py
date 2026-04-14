@@ -6,27 +6,31 @@
 """Helper functions."""
 
 from .utils import (
-    check_nan,
-    get_obs_time_slice,
+    ObsSelector,
+    resolve_obs_temporal_selector,
+    resolve_target_obs_term_selector,
+    resolve_obs_groups,
     inject_obs_time_slice_map,
     get_param,
-    resolve_callable,
-    resolve_nn_activation,
-    resolve_obs_groups,
-    resolve_optimizer,
+    check_nan,
     split_and_pad_trajectories,
     unpad_trajectories,
+    resolve_nn_activation,
+    resolve_optimizer,
+    resolve_callable,
 )
 
 __all__ = [
-    "check_nan",
-    "get_obs_time_slice",
+    "ObsSelector",
+    "resolve_obs_temporal_selector",
+    "resolve_target_obs_term_selector",
+    "resolve_obs_groups",
     "inject_obs_time_slice_map",
     "get_param",
-    "resolve_callable",
-    "resolve_nn_activation",
-    "resolve_obs_groups",
-    "resolve_optimizer",
+    "check_nan",
     "split_and_pad_trajectories",
     "unpad_trajectories",
+    "resolve_nn_activation",
+    "resolve_optimizer",
+    "resolve_callable",
 ]

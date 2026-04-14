@@ -15,7 +15,7 @@ class Distribution(nn.Module):
     """Base class for distribution modules.
 
     Distribution modules encapsulate the stochastic output of a neural model. They define the output structure expected
-    from the MLP, manage learnable distribution parameters, and provide methods for sampling, log probability
+    from the Head module, manage learnable distribution parameters, and provide methods for sampling, log probability
     computation, and entropy calculation.
 
     Subclasses must implement all abstract methods and properties to define a specific distribution type.
@@ -30,11 +30,11 @@ class Distribution(nn.Module):
         super().__init__()
         self.output_dim = output_dim
 
-    def update(self, mlp_output: torch.Tensor) -> None:
-        """Update the distribution parameters given the MLP output.
+    def update(self, head_output: torch.Tensor) -> None:
+        """Update the distribution parameters given the Head output.
 
         Args:
-            mlp_output: Raw output from the MLP.
+            head_output: Raw output from the Head.
         """
         raise NotImplementedError
 
@@ -46,11 +46,11 @@ class Distribution(nn.Module):
         """
         raise NotImplementedError
 
-    def deterministic_output(self, mlp_output: torch.Tensor) -> torch.Tensor:
-        """Extract the deterministic (mean) output from the raw MLP output.
+    def deterministic_output(self, head_output: torch.Tensor) -> torch.Tensor:
+        """Extract the deterministic (mean) output from the raw Head output.
 
         Args:
-            mlp_output: Raw output from the MLP.
+            head_output: Raw output from the Head.
 
         Returns:
             The deterministic output (typically the distribution mean).
@@ -58,7 +58,7 @@ class Distribution(nn.Module):
         raise NotImplementedError
 
     def as_deterministic_output_module(self) -> nn.Module:
-        """Return an export-friendly module that extracts the deterministic output from the MLP output."""
+        """Return an export-friendly module that extracts the deterministic output from the Head output."""
         raise NotImplementedError
 
     @property
@@ -116,14 +116,14 @@ class Distribution(nn.Module):
         """
         raise NotImplementedError
 
-    def init_mlp_weights(self, mlp: nn.Module) -> None:
-        """Initialize distribution-specific weights in the MLP.
+    def init_head_weights(self, head: nn.Module) -> None:
+        """Initialize distribution-specific weights in the Head module.
 
-        This is called after MLP creation to set up any special weight initialization
-        required by the distribution (e.g., initializing std head weights).
+        This is called after Head module creation to set up any special weight initialization
+        required by the distribution (e.g., initializing std Head weights).
 
         Args:
-            mlp: The MLP module whose weights may need initialization.
+            head: The Head module whose weights may need initialization.
         """
         pass
 
@@ -166,9 +166,9 @@ class GaussianDistribution(Distribution):
         # Disable args validation for speedup
         Normal.set_default_validate_args(False)
 
-    def update(self, mlp_output: torch.Tensor) -> None:
-        """Update the Gaussian distribution from MLP output."""
-        mean = mlp_output
+    def update(self, head_output: torch.Tensor) -> None:
+        """Update the Gaussian distribution from Head output."""
+        mean = head_output
         if self.std_type == "scalar":
             std = self.std_param.expand_as(mean)
         elif self.std_type == "log":
@@ -179,12 +179,12 @@ class GaussianDistribution(Distribution):
         """Sample from the Gaussian distribution."""
         return self._distribution.sample()  # type: ignore
 
-    def deterministic_output(self, mlp_output: torch.Tensor) -> torch.Tensor:
-        """Extract the mean from the MLP output."""
-        return mlp_output
+    def deterministic_output(self, head_output: torch.Tensor) -> torch.Tensor:
+        """Extract the mean from the Head output."""
+        return head_output
 
     def as_deterministic_output_module(self) -> nn.Module:
-        """Return an export-friendly module that extracts the mean from the MLP output."""
+        """Return an export-friendly module that extracts the mean from the Head output."""
         return _IdentityDeterministicOutput()
 
     @property
@@ -229,7 +229,7 @@ class HeteroscedasticGaussianDistribution(GaussianDistribution):
     """Gaussian (Normal) distribution module with state-dependent standard deviation.
 
     This distribution parameterizes actions using a multivariate Gaussian with diagonal covariance. The standard
-    deviation is output by the MLP alongside the mean, making it state-dependent (heteroscedastic). It can be
+    deviation is output by the Head alongside the mean, making it state-dependent (heteroscedastic). It can be
     parameterized in either "scalar" space (directly) or "log" space.
     """
 
@@ -243,7 +243,7 @@ class HeteroscedasticGaussianDistribution(GaussianDistribution):
 
         Args:
             output_dim: Dimension of the action/output space.
-            init_std: Initial standard deviation (used to initialize MLP std head bias).
+            init_std: Initial standard deviation (used to initialize Head std).
             std_type: Parameterization of the standard deviation: "scalar" or "log".
         """
         # Skip GaussianDistribution.__init__ to avoid creating unnecessary learnable std parameters.
@@ -260,52 +260,52 @@ class HeteroscedasticGaussianDistribution(GaussianDistribution):
         # Disable args validation for speedup
         Normal.set_default_validate_args(False)
 
-    def update(self, mlp_output: torch.Tensor) -> None:
-        """Update the Gaussian distribution from MLP output."""
+    def update(self, head_output: torch.Tensor) -> None:
+        """Update the Gaussian distribution from Head output."""
         if self.std_type == "scalar":
-            mean, std = torch.unbind(mlp_output, dim=-2)
+            mean, std = torch.unbind(head_output, dim=-2)
         elif self.std_type == "log":
-            mean, log_std = torch.unbind(mlp_output, dim=-2)
+            mean, log_std = torch.unbind(head_output, dim=-2)
             std = torch.exp(log_std)
         self._distribution = Normal(mean, std)
 
-    def deterministic_output(self, mlp_output: torch.Tensor) -> torch.Tensor:
-        """Extract the mean from the MLP output (first slice of the second-to-last dimension)."""
-        return mlp_output[..., 0, :]
+    def deterministic_output(self, head_output: torch.Tensor) -> torch.Tensor:
+        """Extract the mean from the Head output (first slice of the second-to-last dimension)."""
+        return head_output[..., 0, :]
 
     def as_deterministic_output_module(self) -> nn.Module:
-        """Return export-friendly module that extracts the mean from the MLP output."""
+        """Return export-friendly module that extracts the mean from the Head output."""
         return _MeanSliceDeterministicOutput()
 
     @property
     def input_dim(self) -> list[int]:
         """Return the input dimension required by the distribution.
 
-        The MLP must output a tensor of shape ``[..., 2, output_dim]`` where the first slice along the second-to-last
+        The Head must output a tensor of shape ``[..., 2, output_dim]`` where the first slice along the second-to-last
         dimension is the mean and the second is the standard deviation (or log standard deviation).
         """
         return [2, self.output_dim]
 
-    def init_mlp_weights(self, mlp: nn.Module) -> None:
-        """Initialize the std head weights in the MLP."""
+    def init_head_weights(self, head: nn.Module) -> None:
+        """Initialize the std head weights in the Head."""
         # Initialize weights and biases for the std portion of the last layer
-        torch.nn.init.zeros_(mlp[-2].weight[self.output_dim :])  # type: ignore
+        torch.nn.init.zeros_(head[-2].weight[self.output_dim :])  # type: ignore
         if self.std_type == "scalar":
-            torch.nn.init.constant_(mlp[-2].bias[self.output_dim :], self.init_std)  # type: ignore
+            torch.nn.init.constant_(head[-2].bias[self.output_dim :], self.init_std)  # type: ignore
         elif self.std_type == "log":
             init_std_log = torch.log(torch.tensor(self.init_std + 1e-7))
-            torch.nn.init.constant_(mlp[-2].bias[self.output_dim :], init_std_log)  # type: ignore
+            torch.nn.init.constant_(head[-2].bias[self.output_dim :], init_std_log)  # type: ignore
 
 
 class _IdentityDeterministicOutput(nn.Module):
-    """Exportable module that returns the MLP output as is."""
+    """Exportable module that returns the Head output as is."""
 
-    def forward(self, mlp_output: torch.Tensor) -> torch.Tensor:
-        return mlp_output
+    def forward(self, head_output: torch.Tensor) -> torch.Tensor:
+        return head_output
 
 
 class _MeanSliceDeterministicOutput(nn.Module):
-    """Exportable module that extracts the mean from the MLP output (first slice of the second-to-last dimension)."""
+    """Exportable module that extracts the mean from the Head output (first slice of the second-to-last dimension)."""
 
-    def forward(self, mlp_output: torch.Tensor) -> torch.Tensor:
-        return mlp_output[..., 0, :]
+    def forward(self, head_output: torch.Tensor) -> torch.Tensor:
+        return head_output[..., 0, :]

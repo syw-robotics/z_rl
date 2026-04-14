@@ -11,12 +11,10 @@ Main models:
 - `CNNModel`: model for mixed 1D/2D observations.
 - `ComposableModel`: thin `MLPModel` wrapper that accepts `latent_spec` and `head_spec`.
 
-Predefined variants live in [`variants/`](/home/syw/.gitrepos/z_rl/z_rl/models/variants):
+Predefined variants live in [`variants/`](https://github.com/syw-robotics/z_rl/tree/main/z_rl/models/variants):
 
-- `EncoderMLPModel`: `MLPModel` variant with `MLPEncoderLatentSpec` as the latent stage.
-- `MoEModel`: `MLPModel` variant whose head is replaced by a Mixture-of-Experts module.
-  It does not use the base MLP `hidden_dims`; the MoE head shape is controlled by `expert_hidden_dims` and
-  `gate_hidden_dims`.
+- `EncoderMLPModel`: `ComposableModel` variant with `MLPEncoderLatentSpec` as the latent stage.
+- `MoEModel`: `ComposableModel` variant whose head is replaced by a Mixture-of-Experts module. MoE head shape is controlled by `expert_hidden_dims` and `gate_hidden_dims`. This MoE implementation suppors the experts run **in parallel**.
 
 ## Export Logic
 
@@ -36,13 +34,13 @@ For `MLPModel`-based models, both latent and head customization stay export-frie
 
 ## Composition API
 
-Preferred customization lives in [`composition/`](/home/syw/.gitrepos/z_rl/z_rl/models/composition):
+Preferred customization lives in [`composition/`](/home/syw/.gitrepos/z_rl/tree/main/z_rl/models/composition):
 
 - `composition/specs.py`: base classes `LatentSpec` and `HeadSpec`
 - `composition/composable_model.py`: `ComposableModel`
 - `variants/`: concrete model variants and their variant-specific latent/head specs
 
-Usage:
+Simple usage:
 
 ```python
 from z_rl.models.composition import ComposableModel, HeadSpec, LatentSpec

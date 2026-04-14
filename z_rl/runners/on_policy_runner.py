@@ -33,8 +33,10 @@ class OnPolicyRunner:
         print("[OnPolicyRunner] observation_space: ", self.env.observation_space)
         print("[OnPolicyRunner] action_space: ", self.env.action_space)
         print("[OnPolicyRunner] obs_format: ", self.env.obs_format)
-        print("[OnPolicyRunner] obs_group_time_slice_map : ", self.env.obs_group_time_slice_map )
-        print("[OnPolicyRunner] obs_group_layout_mode_map  : ", self.env.obs_group_layout_mode_map )
+        # the belows are for debugging observation infos
+        #  print("[OnPolicyRunner] obs_group_time_slice_map: ", self.env.obs_group_time_slice_map)
+        #  print("[OnPolicyRunner] obs_group_layout_mode_map: ", self.env.obs_group_layout_mode_map)
+        #  print("[OnPolicyRunner] dict_obs_group_names: ", self.env._dict_obs_group_names)
 
         # Setup multi-GPU training if enabled
         self._configure_multi_gpu()

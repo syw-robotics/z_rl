@@ -13,7 +13,7 @@ from tensordict import TensorDict
 
 from z_rl.modules import MLP, EmpiricalNormalization, HiddenState
 from z_rl.modules.distribution import Distribution
-from z_rl.utils import resolve_callable, unpad_trajectories
+from z_rl.utils import ObsSelector, resolve_callable, unpad_trajectories
 
 
 class MLPModel(nn.Module):
@@ -39,7 +39,7 @@ class MLPModel(nn.Module):
         activation: str = "elu",
         obs_normalization: bool = False,
         distribution_cfg: dict | None = None,
-        obs_group_time_slice_map: dict[str, dict[str, slice | torch.Tensor]] | None = None,
+        obs_group_time_slice_map: dict[str, dict[str, ObsSelector]] | None = None,
     ) -> None:
         """Initialize the MLP-based model.
 
@@ -183,7 +183,7 @@ class MLPModel(nn.Module):
         obs_groups: dict[str, list[str]],
         obs_set: str,
         obs_normalization: bool,
-        obs_group_time_slice_map: dict[str, dict[str, slice | torch.Tensor]] | None,
+        obs_group_time_slice_map: dict[str, dict[str, ObsSelector]] | None,
     ) -> None:
         """Resolve observation metadata and build the normalization stage."""
         self.obs_groups, self.obs_dim = self._get_obs_dim(obs, obs_groups, obs_set)

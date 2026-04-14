@@ -8,9 +8,10 @@
 
 Compared with plain RSL-RL style usage, Z-RL emphasizes:
 
-- **Mixin-first design** for cleaner implementation in algorithms and models.
-- **Plugin system** so project-specific logic can live outside the core library.
-- **Adaptor layer** for environment integration, currently including IsaacLab `ManagerBasedRLEnv` support.
+- **Composable design**: for quick implementation of customized algorithms and models.
+- **Plugin system**: so project-specific logic can live outside the core library.
+- **Adaptor layer**: for different rl environment integration, currently including IsaacLab `ManagerBasedRLEnv` support.
+- **`ObsSelector` utility**: cached, reusable observation selectors that make observation operations safe and efficeient.
 
 ## Installation
 
@@ -52,12 +53,38 @@ This creates a minimal package scaffold containing:
 - custom model mixin examples
 - plugin-side IsaacLab config classes (`rl_cfg.py`)
 
+```
+.
+├── pyproject.toml
+├── README.md
+└── z_rl_plugin_example
+    ├── algorithms
+    │   ├── __init__.py
+    │   └── my_ppo.py
+    ├── __init__.py
+    ├── models
+    │   ├── __init__.py
+    │   └── my_model.py
+    ├── modules
+    │   └── __init__.py
+    └── rl_cfg.py
+
+```
+
 Implement your mixins, then install your plugin in editable mode:
 
 ```bash
 cd my_zrl_plugin
 uv pip install -e .
 ```
+
+## TODOs
+
+- [x] added and test `MoEModel` as a Model extension example
+- [x] added and tested `EncoderEstimationPPO` as a PPO extention example
+- [ ] separate a function to get the actions for RolloutStorage.Transition(), `ppo.py` line 130 and `distillation.py` line 93
+- [ ] reorganize `distillation.py` for code clarity
+
 
 ## License
 

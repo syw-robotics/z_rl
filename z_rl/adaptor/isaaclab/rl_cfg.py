@@ -267,17 +267,11 @@ class ZRlEncoderEstimationPpoAlgorithmCfg(ZRlPpoAlgorithmCfg):
     estimation_loss_coef: float = 1.0
     """The coefficient for the auxiliary estimation loss."""
 
-    obs_group_name: str = "critic"
+    target_obs_group_name: str = "critic"
     """The observation group used as the estimation target source."""
 
-    term_name: str = "base_lin_vel"
-    """The observation term selected from ``obs_group_name`` as the estimation target."""
-
-    latent_selector: slice = slice(0, 3)
-    """The actor latent slice used for the auxiliary estimation loss."""
-
-    loss_name: str = "estimation_loss"
-    """The optimization loss key emitted by the encoder-estimation loss spec."""
+    target_obs_term_names: list[str] = ["base_lin_vel"]
+    """The observation terms selected from ``target_obs_group_name`` as the estimation target."""
 
 
 #########################

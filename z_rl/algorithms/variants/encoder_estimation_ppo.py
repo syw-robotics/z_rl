@@ -14,7 +14,7 @@ import torch.nn.functional as F
 from z_rl.env import VecEnv
 from z_rl.models import EncoderMLPModel
 from z_rl.storage import RolloutStorage
-from z_rl.utils import get_obs_time_selector_dim, resolve_obs_component_selector, select_obs_component
+from z_rl.utils import ObsSelector, resolve_target_obs_term_selector
 
 from ..composition import ComposablePPO, PPOLossSpec
 
@@ -24,39 +24,38 @@ class EncoderEstimationLossSpec(PPOLossSpec):
     """PPO loss spec that fits a selected actor latent slice to critic ``base_lin_vel``."""
 
     obs_format: dict[str, dict[str, tuple[int, ...]]]
-    obs_group_layout_mode_map: dict[str, str]
+    obs_group_time_slice_map: dict[str, dict[str, ObsSelector]]
     target_obs_group_name: str = "critic"
-    term_name: str = "base_lin_vel"
-    latent_selector: slice | torch.Tensor = field(default_factory=lambda: slice(0, 3))
+    target_obs_term_names: list[str] = field(default_factory=lambda: ["base_lin_vel"])
     loss_name: str = "estimation_loss"
-    target_selector: slice | torch.Tensor | None = field(default=None, init=False, repr=False)
+    target_obs_selector: ObsSelector = field(default_factory=lambda: ObsSelector(slice(0, 0)), init=False, repr=False)
+    estimation_latent_selector: slice = field(default_factory=lambda: slice(0, 0), init=False, repr=False)
 
     def validate(self, algo: object) -> None:
-        """Validate that the actor is an ``EncoderMLPModel`` and cache the target selector."""
+        """Validate the actor assumptions and cache the resolved target/latent slices."""
         actor = getattr(algo, "actor", None)
-        critic = getattr(algo, "critic", None)
 
         if not isinstance(actor, EncoderMLPModel):
             raise ValueError(
                 f"`EncoderEstimationLossSpec` requires `algo.actor` to be `EncoderMLPModel`, got {type(actor)}."
             )
-        if critic is None or not hasattr(critic, "obs_dim"):
-            raise ValueError("`EncoderEstimationLossSpec` requires the critic model to expose observation metadata.")
 
-        self.target_selector = resolve_obs_component_selector(
-            obs_group_name=self.target_obs_group_name,
-            term_name=self.term_name,
+        self.target_obs_selector = resolve_target_obs_term_selector(
+            target_obs_group_name=self.target_obs_group_name,
+            target_obs_term_names=self.target_obs_term_names,
+            obs_group_time_slice_map=self.obs_group_time_slice_map,
             obs_format=self.obs_format,
-            obs_group_layout_mode_map=self.obs_group_layout_mode_map,
-            frame="last",
         )
-        latent_dim = get_obs_time_selector_dim(self.latent_selector, actor.get_latent_dim())
-        target_dim = get_obs_time_selector_dim(self.target_selector, critic.obs_dim)
-        if target_dim != latent_dim:
+        self.estimation_latent_selector = slice(0, self.target_obs_selector.dim)
+
+        actor_latent_dim = actor.get_latent_dim()
+        if actor_latent_dim < self.target_obs_selector.dim:
             raise ValueError(
-                "`EncoderEstimationLossSpec` requires the selected latent and target component dims to match, "
-                f"got latent_dim={latent_dim}, target_dim={target_dim} for '{self.target_obs_group_name}/{self.term_name}'."
+                "`EncoderEstimationLossSpec` can not infer an estimation latent slice because the actor latent is smaller "
+                f"than target_dim={self.target_obs_selector.dim}: actor_latent_dim={actor_latent_dim}."
             )
+
+        print("[EncoderEstimationPPO] Resolved estimation loss target_obs_selector:", self.target_obs_selector)
 
     def compute(
         self,
@@ -65,10 +64,10 @@ class EncoderEstimationLossSpec(PPOLossSpec):
     ) -> tuple[dict[str, torch.Tensor], dict[str, torch.Tensor]]:
         """Compute an MSE loss between the selected actor latent slice and critic ``base_lin_vel``."""
         actor = algo.actor  # type: ignore[attr-defined]
-        actor_hidden_state = minibatch.hidden_states[0] if minibatch.hidden_states is not None else None
-        actor_latent = actor.get_latent(minibatch.observations, masks=minibatch.masks, hidden_state=actor_hidden_state)
-        target = select_obs_component(minibatch.observations[self.target_obs_group_name], self.target_selector)  # type: ignore[index]
-        estimation_loss = F.mse_loss(actor_latent[..., self.latent_selector], target)
+        actor_latent = actor.get_latent(minibatch.observations)
+        actor_estimation_latent = actor_latent[..., self.estimation_latent_selector]
+        target_obs = self.target_obs_selector.select(minibatch.observations[self.target_obs_group_name])
+        estimation_loss = F.mse_loss(actor_estimation_latent, target_obs)
         return {self.loss_name: estimation_loss}, {}
 
 
@@ -90,9 +89,7 @@ class EncoderEstimationPPO(ComposablePPO):
 
         return EncoderEstimationLossSpec(
             obs_format=env.obs_format,
-            obs_group_layout_mode_map=env.obs_group_layout_mode_map,
-            target_obs_group_name=algorithm_cfg.pop("obs_group_name", "critic"),
-            term_name=algorithm_cfg.pop("term_name", "base_lin_vel"),
-            latent_selector=algorithm_cfg.pop("latent_selector", slice(0, 3)),
-            loss_name=algorithm_cfg.pop("loss_name", "estimation_loss"),
+            obs_group_time_slice_map=env.obs_group_time_slice_map,
+            target_obs_group_name=algorithm_cfg.pop("target_obs_group_name", "critic"),
+            target_obs_term_names=algorithm_cfg.pop("target_obs_term_names", ["base_lin_vel"]),
         )

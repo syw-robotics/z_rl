@@ -14,20 +14,13 @@ from tensordict import TensorDict
 import onnx
 import pytest
 
-from z_rl.models import MLPModel
-from z_rl.models.mixins import MLPEncoderMixin
+from z_rl.models import EncoderMLPModel, MLPModel
 from tests.conftest import make_obs
 
 NUM_ENVS = 4
 OBS_DIM = 8
 NUM_ACTIONS = 4
 OBS_GROUPS = {"actor": ["policy"], "critic": ["policy"]}
-
-
-class EncodedMLPModel(MLPEncoderMixin, MLPModel):
-    """Test helper model that injects an encoder branch into MLPModel."""
-
-    pass
 
 
 def _make_mlp_model(stochastic: bool = False, obs_set: str = "actor", **kwargs: object) -> tuple[MLPModel, TensorDict]:
@@ -143,24 +136,24 @@ class TestObsGroupConcatenation:
         assert not torch.allclose(latent_ab, latent_ba), "Different obs group orders should produce different latents"
 
 
-class TestEncoderMixin:
-    """Tests for encoder-based latent construction."""
+class TestEncoderSpec:
+    """Tests for encoder-spec based latent construction."""
 
     def test_encoder_replaces_policy_latent(self) -> None:
         """The latent adapter should replace the normalized policy latent with the encoder output."""
         obs = TensorDict({"policy": torch.ones(2, 8) * 2}, batch_size=[2])
-        model = EncodedMLPModel(
+        model = EncoderMLPModel(
             obs,
             {"actor": ["policy"]},
             "actor",
             1,
             hidden_dims=[8],
-            encoder_output_dim=5,
+            latent_dim=5,
             encoder_hidden_dims=[7],
         )
 
         latent = model.get_latent(obs)
-        encoded = model.encoder(obs["policy"])
+        encoded = model.latent_adapter.encoder(obs["policy"])
 
         assert latent.shape == (2, 5)
         assert torch.allclose(latent, encoded)
@@ -169,37 +162,37 @@ class TestEncoderMixin:
         """The latent adapter should append the last policy frame when configured."""
         obs = TensorDict({"policy": torch.arange(16, dtype=torch.float32).view(2, 8)}, batch_size=[2])
         time_slice_map = {"policy": {"last": slice(6, 8)}}
-        model = EncodedMLPModel(
+        model = EncoderMLPModel(
             obs,
             {"actor": ["policy"]},
             "actor",
             1,
             hidden_dims=[8],
-            encoder_output_dim=5,
+            latent_dim=5,
             encoder_hidden_dims=[7],
-            concat_policy_last_obs=True,
+            concat_last_obs=True,
             obs_group_time_slice_map=time_slice_map,
         )
 
         latent = model.get_latent(obs)
-        encoded = model.encoder(obs["policy"])
+        encoded = model.latent_adapter.encoder(obs["policy"])
 
         assert latent.shape == (2, 7)
         assert torch.allclose(latent[:, :5], encoded)
         assert torch.allclose(latent[:, 5:], obs["policy"][:, 6:8])
 
     def test_encoder_requires_policy_only_obs_group(self) -> None:
-        """Encoder mixins should reject non-policy or multi-group observation sets."""
+        """Encoder specs should reject non-policy or multi-group observation sets."""
         obs = TensorDict({"group_a": torch.ones(2, 3), "policy": torch.ones(2, 2)}, batch_size=[2])
 
         with pytest.raises(ValueError, match="exactly one active observation group named 'policy'"):
-            EncodedMLPModel(
+            EncoderMLPModel(
                 obs,
                 {"actor": ["group_a", "policy"]},
                 "actor",
                 1,
                 hidden_dims=[8],
-                encoder_output_dim=4,
+                latent_dim=4,
                 encoder_hidden_dims=[6],
             )
 
@@ -241,10 +234,10 @@ class TestMLPModelExport:
 
         assert torch.allclose(original_output, jit_output, atol=1e-5)
 
-    def test_jit_export_with_encoder_mixin(self) -> None:
-        """JIT export should preserve latent adapters installed by encoder mixins."""
+    def test_jit_export_with_encoder_spec(self) -> None:
+        """JIT export should preserve latent adapters installed by encoder specs."""
         obs = make_obs(NUM_ENVS, OBS_DIM)
-        model = EncodedMLPModel(
+        model = EncoderMLPModel(
             obs,
             OBS_GROUPS,
             "actor",
@@ -255,9 +248,9 @@ class TestMLPModelExport:
                 "init_std": 1.0,
                 "std_type": "scalar",
             },
-            encoder_output_dim=6,
+            latent_dim=6,
             encoder_hidden_dims=[12],
-            concat_policy_last_obs=True,
+            concat_last_obs=True,
             obs_group_time_slice_map={"policy": {"last": slice(6, 8)}},
         )
         model.eval()
@@ -329,10 +322,10 @@ class TestMLPModelExport:
 
     @pytest.mark.filterwarnings("ignore:.*legacy TorchScript.*:DeprecationWarning")
     @pytest.mark.filterwarnings("ignore:.*will be removed.*:DeprecationWarning")
-    def test_onnx_export_with_encoder_mixin(self) -> None:
-        """ONNX export should include encoder-mixin latent adapters without custom wrappers."""
+    def test_onnx_export_with_encoder_spec(self) -> None:
+        """ONNX export should include encoder-spec latent adapters without custom wrappers."""
         obs = make_obs(NUM_ENVS, OBS_DIM)
-        model = EncodedMLPModel(
+        model = EncoderMLPModel(
             obs,
             OBS_GROUPS,
             "actor",
@@ -343,9 +336,9 @@ class TestMLPModelExport:
                 "init_std": 1.0,
                 "std_type": "scalar",
             },
-            encoder_output_dim=6,
+            latent_dim=6,
             encoder_hidden_dims=[12],
-            concat_policy_last_obs=True,
+            concat_last_obs=True,
             obs_group_time_slice_map={"policy": {"last": slice(6, 8)}},
         )
         model.eval()

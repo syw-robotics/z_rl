@@ -13,7 +13,7 @@ import torch.nn as nn
 from tensordict import TensorDict
 
 from z_rl.modules import MLP
-from z_rl.utils import get_obs_time_selector_dim, resolve_obs_time_selector, select_obs_time_slice
+from z_rl.utils import ObsSelector, resolve_obs_temporal_selector
 
 from z_rl.models.composition import ComposableModel, LatentSpec
 
@@ -38,32 +38,28 @@ class MLPEncoderLatentSpec(LatentSpec):
             raise ValueError(f"`latent_dim` must be positive, got {self.latent_dim}.")
         if isinstance(self.encoder_hidden_dims, (tuple, list)) and len(self.encoder_hidden_dims) == 0:
             raise ValueError("`encoder_hidden_dims` can not be empty.")
-        if self.concat_last_obs and "policy" not in getattr(model, "obs_group_time_slice_map", {}):
-            raise ValueError(
-                "`concat_last_obs=True` requires a cached 'policy' time slice in `obs_group_time_slice_map`."
-            )
+
+        self.last_obs_selector = None
+        if self.concat_last_obs:
+            self.last_obs_selector = resolve_obs_temporal_selector("policy", "last", model.obs_group_time_slice_map)
 
     def build_latent_adapter(self, model: nn.Module) -> nn.Module:
         """Build the encoder adapter and cache the optional last-frame selector once."""
         encoder = MLP(model.obs_dim, self.latent_dim, self.encoder_hidden_dims, self.activation)
-        last_obs_selector = None
-        if self.concat_last_obs:
-            last_obs_selector = resolve_obs_time_selector("policy", "last", model.obs_group_time_slice_map)
-        return _EncoderLatentAdapter(encoder=encoder, last_obs_selector=last_obs_selector)
+        return _EncoderLatentAdapter(encoder=encoder, last_obs_selector=self.last_obs_selector)
 
     def get_latent_dim(self, model: nn.Module) -> int:
         """Return the encoder latent size plus the optional appended last-frame width."""
         latent_dim = self.latent_dim
         if not self.concat_last_obs:
             return latent_dim
-        last_obs_selector = resolve_obs_time_selector("policy", "last", model.obs_group_time_slice_map)
-        return latent_dim + get_obs_time_selector_dim(last_obs_selector, model.obs_dim)
+        return latent_dim + self.last_obs_selector.dim
 
 
 class _EncoderLatentAdapter(nn.Module):
     """Latent adapter that encodes the active observation group and optionally appends the last frame."""
 
-    def __init__(self, encoder: nn.Module, last_obs_selector: slice | torch.Tensor | None = None) -> None:
+    def __init__(self, encoder: nn.Module, last_obs_selector: ObsSelector | None = None) -> None:
         """Store the encoder and the optional cached selector for the last observation frame."""
         super().__init__()
         self.encoder = encoder
@@ -74,7 +70,7 @@ class _EncoderLatentAdapter(nn.Module):
         latent = self.encoder(x)
         if self.last_obs_selector is None:
             return latent
-        last_obs = select_obs_time_slice(x, self.last_obs_selector)
+        last_obs = self.last_obs_selector.select(x)
         return torch.cat([latent, last_obs], dim=-1)
 
 
@@ -94,7 +90,7 @@ class EncoderMLPModel(ComposableModel):
         activation: str = "elu",
         obs_normalization: bool = False,
         distribution_cfg: dict | None = None,
-        obs_group_time_slice_map: dict[str, dict[str, slice | torch.Tensor]] | None = None,
+        obs_group_time_slice_map: dict[str, dict[str, ObsSelector]] | None = None,
         latent_dim: int = 128,
         encoder_hidden_dims: tuple[int, ...] | list[int] = (256,),
         encoder_activation: str = "elu",

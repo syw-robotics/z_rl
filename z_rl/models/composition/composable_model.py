@@ -9,6 +9,8 @@ from __future__ import annotations
 import torch
 from tensordict import TensorDict
 
+from z_rl.utils import ObsSelector
+
 from ..mlp_model import MLPModel
 from .specs import HeadSpec, LatentSpec
 
@@ -26,7 +28,7 @@ class ComposableModel(MLPModel):
         activation: str = "elu",
         obs_normalization: bool = False,
         distribution_cfg: dict | None = None,
-        obs_group_time_slice_map: dict[str, dict[str, slice | torch.Tensor]] | None = None,
+        obs_group_time_slice_map: dict[str, dict[str, ObsSelector]] | None = None,
         latent_spec: LatentSpec | None = None,
         head_spec: HeadSpec | None = None,
     ) -> None:

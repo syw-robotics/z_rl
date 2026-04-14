@@ -43,6 +43,8 @@ At runtime it:
 - returns observations as `TensorDict`
 - caches observation metadata such as `obs_format`, `obs_group_layout_mode_map`, and time-slice selectors
 
+Those caches metadata enables initializing obs selectors ( as `ObsSelector` objects from `z_rl.utils`), which let downstream code operates observation safer and lazier.
+
 ## Observation groups and `concatenate_terms`
 
 In IsaacLab, each observation group is controlled by `ObservationGroupCfg.concatenate_terms`.
@@ -206,10 +208,10 @@ The wrapper can precompute efficient selectors for compatible groups:
 Use the cached selector metadata exposed by the wrapper together with the utility helpers:
 
 ```python
-from z_rl.utils import resolve_obs_time_selector, select_obs_time_slice
+from z_rl.utils import resolve_obs_temporal_selector, select_obs_time_slice
 
-last_selector = resolve_obs_time_selector("policy", "last", env.obs_group_time_slice_map)
-last_obs = select_obs_time_slice(obs["policy"], last_selector)
+last_obs_selector = resolve_obs_temporal_selector("policy", "last", env.obs_group_time_slice_map)
+last_obs = last_obs_selector.select(obs)
 ```
 
 This is only available for groups where:
@@ -229,7 +231,7 @@ Useful properties:
 - `obs_group_layout_mode_map`
   - actual layout used per group: `"term_major"` or `"history_major"`
 - `obs_group_time_slice_map`
-  - cached selectors used by `resolve_obs_time_selector()` and `select_obs_time_slice()`
+  - cached selectors used by `resolve_obs_temporal_selector()`
 
 These properties are useful when model code needs to know how a flattened vector was assembled.
 

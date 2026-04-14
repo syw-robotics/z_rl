@@ -37,10 +37,21 @@ def _write_file(path: Path, content: str) -> None:
     path.write_text(content, encoding="utf-8")
 
 
+def _get_current_zrl_version() -> str:
+    """Read the current z_rl version from the repository pyproject."""
+    repo_root = Path(__file__).resolve().parents[2]
+    pyproject_content = (repo_root / "pyproject.toml").read_text(encoding="utf-8")
+    match = re.search(r'^version\s*=\s*"([^"]+)"', pyproject_content, re.MULTILINE)
+    if match is None:
+        raise RuntimeError("Could not determine z_rl version from pyproject.toml.")
+    return match.group(1)
+
+
 def create_plugin_template(target_dir: str | Path, package_name: str) -> Path:
     """Create a plugin template project and return the project root path."""
     root = Path(target_dir).expanduser().resolve()
     package_name = _validate_package_name(package_name)
+    zrl_version = _get_current_zrl_version()
 
     if root.exists() and any(root.iterdir()):
         raise FileExistsError(f"Target directory '{root}' already exists and is not empty.")
@@ -61,7 +72,7 @@ version = "0.1.0"
 description = "External plugin package for z_rl"
 readme = "README.md"
 requires-python = ">=3.9"
-dependencies = []
+dependencies = ["z_rl=={zrl_version}"]
 
 [tool.setuptools.packages.find]
 where = ["."]

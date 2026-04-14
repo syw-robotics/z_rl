@@ -4,7 +4,7 @@
 
 `Z` is the last letter of the alphabet, we hope Z-RL is your **last** time dedicatedly reviewing RL infra code.  
 
-## Key Features
+## 🎯 Key Features
 
 Compared with plain RSL-RL style usage, Z-RL emphasizes:
 
@@ -13,7 +13,7 @@ Compared with plain RSL-RL style usage, Z-RL emphasizes:
 - **Adaptor layer**: for different rl environment integration, currently including IsaacLab `ManagerBasedRLEnv` support.
 - **`ObsSelector` utility**: cached, reusable observation selectors that make observation operations safe and efficeient.
 
-## Installation
+## 📦 Installation
 
 Before installing Z-RL, make sure Python `3.9+` is available.
 
@@ -25,7 +25,7 @@ cd z_rl
 python -m pip install -e .
 ```
 
-## Usage
+## 🚀 Usage
 
 For detailed module guides, see:
 
@@ -33,7 +33,7 @@ For detailed module guides, see:
 - [Algorithms README](z_rl/algorithms/README.md)
 - [Models README](z_rl/models/README.md)
 
-## Plugin System
+## 🔌 Plugin System
 
 Z-RL supports **external plugin packages** so your custom algorithms/models/modules stay isolated from upstream core code.
 
@@ -75,17 +75,18 @@ Implement your mixins, then install your plugin in editable mode:
 
 ```bash
 cd my_zrl_plugin
-uv pip install -e .
+python -m pip install -e .
 ```
 
-## TODOs
+## 📋 TODOs
 
-- [x] added and test `MoEModel` as a Model extension example
-- [x] added and tested `EncoderEstimationPPO` as a PPO extention example
-- [ ] separate a function to get the actions for RolloutStorage.Transition(), `ppo.py` line 130 and `distillation.py` line 93
-- [ ] reorganize `distillation.py` for code clarity
+- ✅ Added and tested `MoEModel` as a Model extension example
+- ✅ Added and tested `EncoderEstimationPPO` as a PPO extention example
+- ❌ Separate a function to get the actions for `RolloutStorage.Transition()`, `ppo.py` line 130 and `distillation.py` line 93
+- ❌ Reorganize `RNNModel` and `CNNModel` in the `ComposableModel` manner
+<!-- - ❌ Reorganize `distillation.py` for code clarity -->
 
 
-## License
+## 📄 License
 
 BSD-3-Clause. See [LICENSE](LICENSE).

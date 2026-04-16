@@ -12,7 +12,7 @@ Plugin template for `z_rl`.
 ## Install
 
 ```bash
-uv pip install -e .
+python -m pip install -e .
 ```
 
 ## Structure

@@ -73,7 +73,8 @@ class VAE(nn.Module):
         """
         mu, log_var = self.encode(x)
         z = self.reparameterize(mu, log_var)
-        return z
+        output = self.decode(z)
+        return output
 
     @staticmethod
     def compute_loss(

@@ -7,7 +7,7 @@
 
 from .composition import ComposableModel
 from .mlp_model import MLPModel
-from .variants import EncoderMLPModel, MoEModel
+from .variants import EncoderMLPModel, MoEModel, VAEModel
 from .rnn_model import RNNModel
 from .cnn_model import CNNModel
 
@@ -17,6 +17,7 @@ __all__ = [
     "ComposableModel",
     "EncoderMLPModel",
     "MoEModel",
+    "VAEModel",
     "RNNModel",
     "CNNModel",
 ]

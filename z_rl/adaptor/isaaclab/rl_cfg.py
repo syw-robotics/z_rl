@@ -111,6 +111,24 @@ class ZRlMoEModelCfg:
     gate_hidden_dims: list[int] | None = None
     """The hidden dimensions of the gate network. If None, use a linear gate."""
 
+    pretrained_expert_path: str | None = None
+    """Optional checkpoint path used to initialize ``head.experts`` weights."""
+
+    pretrained_expert_state_dict_key: str | None = None
+    """Optional key to locate a state dict inside the checkpoint when loading pretrained experts."""
+
+    load_pretrained_expert_strict: bool = True
+    """Whether expert loading should require an exact key match for all expert parameters."""
+
+    pretrained_expert_target_indices: list[int] | None = None
+    """Optional expert index list that should receive pretrained initialization."""
+
+    pretrained_expert_target_index: int | None = None
+    """Deprecated single-index alias of `pretrained_expert_target_indices` for backward compatibility."""
+
+    pretrained_expert_specs: list[dict] | None = None
+    """Optional multi-source expert init specs. Each item supports: path, state_dict_key, strict, target_expert_indices."""
+
 
 @configclass
 class ZRlEncoderMLPModelCfg(ZRlMLPModelCfg):
@@ -130,6 +148,26 @@ class ZRlEncoderMLPModelCfg(ZRlMLPModelCfg):
 
     concat_last_obs: bool = False
     """Whether to concatenate the last observation frame to the encoder latent. Defaults to False."""
+
+
+@configclass
+class ZRlVAEModelCfg(ZRlMLPModelCfg):
+    """Configuration for VAE-based model."""
+
+    class_name: str = "VAEModel"
+    """The model class name. Defaults to VAEModel."""
+
+    latent_dim: int = 64
+    """The latent dimension produced by the VAE encoder branch."""
+
+    encoder_hidden_dims: list[int] = MISSING
+    """The hidden dimensions of the VAE encoder MLP."""
+
+    decoder_hidden_dims: list[int] = MISSING
+    """The hidden dimensions of the VAE decoder MLP."""
+
+    vae_activation: str = "elu"
+    """The activation function for the VAE encoder/decoder MLPs. Defaults to elu."""
 
 
 @configclass

@@ -91,3 +91,25 @@ class TestComposablePPO:
         assert opt_losses["aux_loss"].item() == 2.0
         assert non_opt_losses["kl"].item() == 0.5
         assert non_opt_losses["aux_metric"].item() == 3.0
+
+    def test_subclass_can_override_act(self) -> None:
+        class _CustomActionPPO(ComposablePPO):
+            def act(self, obs):
+                self.transition.hidden_states = (self.actor.get_hidden_state(), self.critic.get_hidden_state())
+                self.transition.actions = torch.full((NUM_ENVS, NUM_ACTIONS), 9.0)
+                self.transition.values = self.critic(obs).detach()
+                self.transition.actions_log_prob = torch.zeros(NUM_ENVS)
+                self.transition.distribution_params = (torch.ones(NUM_ENVS, NUM_ACTIONS),)
+                self.transition.observations = obs
+                return self.transition.actions
+
+        obs = make_obs(NUM_ENVS, OBS_DIM)
+        obs_groups = {"actor": ["policy"], "critic": ["policy"]}
+        actor = _make_actor(obs, obs_groups)
+        critic = _make_critic(obs, obs_groups)
+        storage = RolloutStorage("rl", NUM_ENVS, NUM_STEPS, obs, [NUM_ACTIONS])
+        algo = _CustomActionPPO(actor, critic, storage, loss_spec=_DummyLossSpec())
+
+        actions = algo.act(obs)
+
+        assert torch.equal(actions, torch.full((NUM_ENVS, NUM_ACTIONS), 9.0))

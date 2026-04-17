@@ -40,6 +40,12 @@ class ComposablePPO(PPO):
             non_opt_losses.update(extra_non_opt_losses)
         return opt_losses, non_opt_losses
 
+    def act(self, obs: TensorDict) -> torch.Tensor:
+        """ Subclasses can override this method when a PPO variant needs full control over rollout-time action generation
+        and transition bookkeeping.
+        """
+        return super().act(obs)
+
     @classmethod
     def build_loss_spec(cls, env: VecEnv, algorithm_cfg: dict) -> PPOLossSpec:
         """Build the loss spec for this PPO variant from the environment and algorithm config."""

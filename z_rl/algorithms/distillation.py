@@ -39,6 +39,7 @@ class Distillation:
         max_grad_norm: float | None = None,
         loss_type: str = "mse",
         optimizer: str = "adam",
+        student_stochastic_output: bool = False,
         device: str = "cpu",
         # Distributed training parameters
         multi_gpu_cfg: dict | None = None,
@@ -74,6 +75,7 @@ class Distillation:
         self.gradient_length = gradient_length
         self.learning_rate = learning_rate
         self.max_grad_norm = max_grad_norm
+        self.student_stochastic_output = student_stochastic_output
 
         # Initialize the loss function
         loss_fn_dict = {
@@ -90,7 +92,7 @@ class Distillation:
     def act(self, obs: TensorDict) -> torch.Tensor:
         """Sample actions and store transition data."""
         # Compute the actions
-        self.transition.actions = self.student(obs, stochastic_output=True).detach()
+        self.transition.actions = self.student(obs, stochastic_output=self.student_stochastic_output).detach()
         self.transition.privileged_actions = self.teacher(obs).detach()
         # Record the observations
         self.transition.observations = obs
@@ -129,7 +131,7 @@ class Distillation:
             self.student.detach_hidden_state()
             for batch in self.storage.generator():
                 # Inference of the student for gradient computation
-                actions = self.student(batch.observations)
+                actions = self.student(batch.observations, stochastic_output=self.student_stochastic_output)
 
                 # Behavior cloning loss
                 behavior_loss = self.loss_fn(actions, batch.privileged_actions)

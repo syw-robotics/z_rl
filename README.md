@@ -82,9 +82,7 @@ python -m pip install -e .
 
 - ✅ Added and tested `MoEModel` as a Model extension example
 - ✅ Added and tested `EncoderEstimationPPO` as a PPO extention example
-- ❌ Separate a function to get the actions for `RolloutStorage.Transition()`, `ppo.py` line 130 and `distillation.py` line 93
 - ❌ Reorganize `RNNModel` and `CNNModel` in the `ComposableModel` manner
-<!-- - ❌ Reorganize `distillation.py` for code clarity -->
 
 
 ## 📄 License

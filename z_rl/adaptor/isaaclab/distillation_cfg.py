@@ -42,6 +42,9 @@ class ZRlDistillationAlgorithmCfg:
     loss_type: Literal["mse", "huber"] = "mse"
     """The loss type to use for the student policy. Defaults to mse."""
 
+    student_stochastic_output: bool = False
+    """Whether to use stochastic student outputs during rollout and distillation updates. Defaults to False."""
+
 
 #########################
 # Runner configurations #

@@ -119,16 +119,7 @@ class OnPolicyRunner:
             self.current_learning_iteration = it
 
             # Log information
-            self.logger.log(
-                it=it,
-                start_it=start_it,
-                total_it=total_it,
-                collect_time=collect_time,
-                learn_time=learn_time,
-                loss_dict=loss_dict,
-                learning_rate=self.alg.learning_rate,
-                action_std=self.alg.get_policy().output_std,
-            )
+            self.print_log_info(it, start_it, total_it, collect_time, learn_time, loss_dict)
 
             # Save model
             if self.logger.writer is not None and it % self.cfg["save_interval"] == 0:
@@ -161,6 +152,13 @@ class OnPolicyRunner:
             map_location (str | None): Device mapping for loading the model.
         """
         loaded_dict = torch.load(path, weights_only=False, map_location=map_location)
+        if "student_state_dict" in loaded_dict:
+            print(
+                "[OnPolicyRunner][WARNING] Checkpoint contains 'student_state_dict'. "
+                "OnPolicyRunner expects 'actor_state_dict' when resuming RL training. "
+                "If you want to finetune a distilled student policy with RL, make sure to use "
+                "`z-rl-checkpoint-key-editor` cli command to rename 'student_state_dict' to 'actor_state_dict' before loading."
+            )
         load_iteration = self.alg.load(loaded_dict, load_cfg, strict)
         if load_iteration:
             self.current_learning_iteration = loaded_dict["iter"]
@@ -209,6 +207,18 @@ class OnPolicyRunner:
     def add_git_repo_to_log(self, repo_file_path: str) -> None:
         """Register a repository path whose git status should be logged."""
         self.logger.git_status_repos.append(repo_file_path)
+
+    def print_log_info(self, it: int, start_it: int, total_it: int, collect_time: float, learn_time: float, loss_dict: dict) -> None:
+        self.logger.log(
+            it=it,
+            start_it=start_it,
+            total_it=total_it,
+            collect_time=collect_time,
+            learn_time=learn_time,
+            loss_dict=loss_dict,
+            learning_rate=self.alg.learning_rate,
+            action_std=self.alg.get_policy().output_std,
+        )
 
     def _configure_multi_gpu(self) -> None:
         """Configure multi-gpu training."""

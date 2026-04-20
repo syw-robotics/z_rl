@@ -120,7 +120,7 @@ class Logger:
         learn_time: float,
         loss_dict: dict,
         learning_rate: float,
-        action_std: torch.Tensor,
+        action_std: torch.Tensor | None = None,
         print_minimal: bool = False,
         width: int = 80,
         pad: int = 40,
@@ -165,7 +165,8 @@ class Logger:
             self.writer.add_scalar("Loss/learning_rate", learning_rate, it)
 
             # Log std
-            self.writer.add_scalar("Policy/mean_std", action_std.mean().item(), it)
+            if action_std is not None:
+                self.writer.add_scalar("Policy/mean_std", action_std.mean().item(), it)
 
             # Log performance
             fps = int(collection_size / (collect_time + learn_time))
@@ -211,7 +212,8 @@ class Logger:
                 log_string += f"""{"Mean episode length:":>{pad}} {statistics.mean(self.lenbuffer):.2f}\n"""
 
             # Print std
-            log_string += f"""{"Mean action std:":>{pad}} {action_std.mean().item():.2f}\n"""
+            if action_std is not None:
+                log_string += f"""{"Mean action std:":>{pad}} {action_std.mean().item():.2f}\n"""
 
             # Print episode extras
             if not print_minimal:

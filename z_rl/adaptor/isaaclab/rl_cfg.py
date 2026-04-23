@@ -41,6 +41,14 @@ class ZRlMLPModelCfg:
     distribution_cfg: DistributionCfg | None = None
     """The configuration for the output distribution. Defaults to None, in which case no distribution is used."""
 
+    init_weights: float | tuple[float, ...] | None = None
+    """Optional orthogonal initialization gain for the model head.
+
+    If None (default), no orthogonal initialization is applied.
+    If a float, all linear layers use the same gain.
+    If a tuple, each linear layer uses the corresponding gain (by layer index).
+    """
+
     @configclass
     class DistributionCfg:
         """Configuration for the output distribution."""
@@ -228,6 +236,9 @@ class ZRlCNNModelCfg(ZRlMLPModelCfg):
 
     cnn_projection_cfg: CNNProjectionCfg | None = None
     """Optional configuration for a projection MLP applied after flattened CNN features."""
+
+    cnn_init_weights: bool = False
+    """Optional do Kaiming initialization to cnns."""
 
 
 ############################

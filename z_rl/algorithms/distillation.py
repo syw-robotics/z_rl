@@ -16,6 +16,32 @@ from z_rl.storage import RolloutStorage
 from z_rl.utils import inject_obs_time_slice_map, resolve_callable, resolve_obs_groups, resolve_optimizer
 
 
+def _pop_model_init_config(model_cfg: dict) -> tuple[float | tuple[float, ...] | None, bool | None]:
+    """Remove post-construction initialization settings from a model config."""
+    init_weights = model_cfg.pop("init_weights", None)
+    cnn_init_weights = model_cfg.pop("cnn_init_weights", None)
+    return init_weights, cnn_init_weights
+
+
+def _apply_model_init_config(
+    model: MLPModel,
+    model_name: str,
+    init_weights: float | tuple[float, ...] | None,
+    cnn_init_weights: bool | None,
+) -> None:
+    """Apply optional post-construction initialization hooks to a model."""
+    if init_weights is not None:
+        model.head.init_weights(init_weights)
+        print(f"{model_name} Head uses orthogonal init: {init_weights}")
+
+    if cnn_init_weights:
+        if not hasattr(model, "cnns"):
+            raise ValueError(f"{model_name} received cnn_init_weights=True but the model does not define CNN encoders.")
+        for cnn in model.cnns.values():  # type: ignore[attr-defined]
+            cnn.init_cnn_weights()
+        print(f"{model_name} CNNs use kaiming init")
+
+
 class Distillation:
     """Distillation algorithm for training a student model to mimic a teacher model."""
 
@@ -238,6 +264,10 @@ class Distillation:
         inject_obs_time_slice_map(cfg["student"], student_class, env)
         inject_obs_time_slice_map(cfg["teacher"], teacher_class, env)
 
+        # Pop init-only configs before creating models (they are not model __init__ args)
+        student_init_weights, student_cnn_init_weights = _pop_model_init_config(cfg["student"])
+        teacher_init_weights, teacher_cnn_init_weights = _pop_model_init_config(cfg["teacher"])
+
         # Initialize the policy
         student: MLPModel = student_class(obs, cfg["obs_groups"], "student", env.num_actions, **cfg["student"]).to(
             device
@@ -247,6 +277,9 @@ class Distillation:
             device
         )
         print(f"Teacher Model: {teacher}")
+        _apply_model_init_config(student, "Student", student_init_weights, student_cnn_init_weights)
+        _apply_model_init_config(teacher, "Teacher", teacher_init_weights, teacher_cnn_init_weights)
+        print("-" * 80)
 
         # Initialize the storage
         storage = RolloutStorage("distillation", env.num_envs, cfg["num_steps_per_env"], obs, [env.num_actions], device)

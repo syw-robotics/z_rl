@@ -198,8 +198,8 @@ class Logger:
             log_string += (
                 f"""{"Total steps:":>{pad}} {self.tot_timesteps} \n"""
                 f"""{"Steps per second:":>{pad}} {fps:.0f} \n"""
-                f"""{"Collection time:":>{pad}} {collect_time:.3f}s \n"""
-                f"""{"Learning time:":>{pad}} {learn_time:.3f}s \n"""
+                #  f"""{"Collection time:":>{pad}} {collect_time:.3f}s \n"""
+                #  f"""{"Learning time:":>{pad}} {learn_time:.3f}s \n"""
             )
 
             # Print losses

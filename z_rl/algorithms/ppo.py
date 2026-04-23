@@ -422,6 +422,12 @@ class PPO:
         inject_obs_time_slice_map(cfg["actor"], actor_class, env)
         inject_obs_time_slice_map(cfg["critic"], critic_class, env)
 
+        # Pop init_weights configs before creating models (they are not model __init__ args)
+        actor_init_weights = cfg["actor"].pop("init_weights", None)
+        actor_cnn_init_weights = cfg["actor"].pop("cnn_init_weights", None)
+        critic_init_weights = cfg["critic"].pop("init_weights", None)
+        critic_cnn_init_weights = cfg["critic"].pop("cnn_init_weights", None)
+
         # Initialize the policy
         actor: MLPModel = actor_class(obs, cfg["obs_groups"], "actor", env.num_actions, **cfg["actor"]).to(device)
         print(f"Actor Model: {actor}")
@@ -429,6 +435,23 @@ class PPO:
             cfg["critic"]["cnns"] = actor.cnns  # type: ignore
         critic: MLPModel = critic_class(obs, cfg["obs_groups"], "critic", 1, **cfg["critic"]).to(device)
         print(f"Critic Model: {critic}")
+
+        # Initialize weights if configured
+        if actor_init_weights is not None:
+            actor.head.init_weights(actor_init_weights)
+            print("-" * 80)
+            print(f"Actor Head uses orthogonal init: {actor_cnn_init_weights}")
+        if critic_init_weights is not None:
+            critic.head.init_weights(critic_init_weights)
+            print(f"Critic Head uses orthogonal init: {critic_init_weights}")
+        # Initialize CNN weights if configured
+        if actor_cnn_init_weights:
+            actor.init_cnn_weights()
+            print(f"Actor CNNs use kaiming init")
+        if critic_cnn_init_weights:
+            critic.init_cnn_weights()
+            print(f"Critic CNNs use kaiming init")
+        print("-" * 80)
 
         # Initialize the storage
         storage = RolloutStorage("rl", env.num_envs, cfg["num_steps_per_env"], obs, [env.num_actions], device)

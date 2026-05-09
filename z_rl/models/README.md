@@ -21,16 +21,15 @@ Predefined variants live in [`variants/`](https://github.com/syw-robotics/z_rl/t
 `MLPModel` export follows the runtime structure:
 
 ```text
-normalized input -> latent_adapter -> head -> deterministic_output
+flat ONNX input -> latent_adapter's export module -> head -> deterministic_output
 ```
 
 Export entry points:
 
-- `model.as_jit()`
 - `model.as_onnx(...)`
 
-For `MLPModel`-based models, both latent and head customization stay export-friendly because export wrappers copy
-`latent_adapter` and `head`.
+For `MLPModel`-based models, both latent and head customization stay export-friendly because ONNX wrappers copy the
+latent adapter's tensor-only export module and the head.
 
 ## Composition API
 

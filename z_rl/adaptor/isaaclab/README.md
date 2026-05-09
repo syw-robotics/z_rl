@@ -8,7 +8,7 @@ It currently provides:
 - `ZRlBaseRunnerCfg` / `ZRlOnPolicyRunnerCfg` and related config classes in `rl_cfg.py`
 - `ZRlDistillationRunnerCfg` and distillation algorithm config in `distillation_cfg.py`
 - `ZRlSymmetryCfg` for symmetry augmentation settings
-- `export_policy_as_jit()` / `export_policy_as_onnx()` for policy export
+- `export_policy_as_onnx()` for policy export
 
 ## Quick start
 
@@ -256,4 +256,4 @@ Use `history_major` when:
 - `rl_cfg.py`: training runner, algorithm, and model config classes
 - `distillation_cfg.py`: distillation-specific runner and algorithm configs
 - `symmetry_cfg.py`: symmetry augmentation config
-- `exporter.py`: TorchScript / ONNX export helpers
+- `exporter.py`: ONNX export helpers

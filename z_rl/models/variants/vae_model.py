@@ -17,7 +17,7 @@ from z_rl.models.composition import ComposableModel, HeadSpec, LatentSpec
 
 
 @dataclass(slots=True)
-class VAELatentSpec(LatentSpec):
+class VAEEncoderLatentSpec(LatentSpec):
     """Latent spec that replaces normalized policy observations with sampled VAE latent."""
 
     latent_dim: int = 64
@@ -29,7 +29,7 @@ class VAELatentSpec(LatentSpec):
         """Validate assumptions needed by the VAE latent/head composition."""
         if getattr(model, "obs_groups", None) != ["policy"]:
             raise ValueError(
-                "`VAELatentSpec` requires exactly one active observation group named 'policy'. "
+                "`VAEEncoderLatentSpec` requires exactly one active observation group named 'policy'. "
                 f"Got {getattr(model, 'obs_groups', None)}."
             )
         if self.latent_dim <= 0:
@@ -49,7 +49,11 @@ class VAELatentSpec(LatentSpec):
             decoder_hidden_dims=self.decoder_hidden_dims,
             activation=self.activation,
         )
-        return _VAELatentAdapter(vae=vae)
+        return _VAELatentAdapter(
+            obs_group="policy",
+            obs_normalizer=model._build_obs_normalizer(model.obs_normalization),
+            vae=vae,
+        )
 
     def get_latent_dim(self, model: nn.Module) -> int:
         """Return sampled latent width."""
@@ -87,19 +91,47 @@ class VAEDecoderHeadSpec(HeadSpec):
 class _VAELatentAdapter(nn.Module):
     """Latent adapter that performs VAE encode + reparameterize."""
 
-    def __init__(self, vae: VAE) -> None:
+    def __init__(self, obs_group: str, obs_normalizer: nn.Module, vae: VAE) -> None:
         super().__init__()
+        self.obs_group = obs_group
+        self.obs_normalizer = obs_normalizer
         self.vae = vae
         self.last_mu: torch.Tensor | None = None
         self.last_log_var: torch.Tensor | None = None
 
-    def forward(self, x: torch.Tensor) -> torch.Tensor:
-        """Encode ``x`` and sample latent ``z`` using the reparameterization trick."""
+    def forward(self, obs: TensorDict) -> torch.Tensor:
+        """Normalize and encode the configured observation group."""
+        x = self.obs_normalizer(obs[self.obs_group])
         mu, log_var = self.vae.encode(x)
         z = self.vae.reparameterize(mu, log_var)
         self.last_mu = mu
         self.last_log_var = log_var
         return z
+
+    def update_normalization(self, obs: TensorDict) -> None:
+        """Update running normalization statistics for the encoded observation group."""
+        update = getattr(self.obs_normalizer, "update", None)
+        if update is not None:
+            update(obs[self.obs_group])
+
+    def as_export_module(self) -> nn.Module:
+        """Return a tensor-only adapter for ONNX export."""
+        return _VAELatentAdapterExporter(self.obs_normalizer, self.vae)
+
+
+class _VAELatentAdapterExporter(nn.Module):
+    """Tensor-only export adapter for VAE latents."""
+
+    def __init__(self, obs_normalizer: nn.Module, vae: VAE) -> None:
+        super().__init__()
+        self.obs_normalizer = obs_normalizer
+        self.vae = vae
+
+    def forward(self, x: torch.Tensor) -> torch.Tensor:
+        """Normalize, encode, and sample a VAE latent."""
+        x = self.obs_normalizer(x)
+        mu, log_var = self.vae.encode(x)
+        return self.vae.reparameterize(mu, log_var)
 
 
 class VAEModel(ComposableModel):
@@ -134,7 +166,7 @@ class VAEModel(ComposableModel):
             activation=activation,
             obs_normalization=obs_normalization,
             distribution_cfg=distribution_cfg,
-            latent_spec=VAELatentSpec(
+            latent_spec=VAEEncoderLatentSpec(
                 latent_dim=latent_dim,
                 encoder_hidden_dims=encoder_hidden_dims,
                 decoder_hidden_dims=decoder_hidden_dims,

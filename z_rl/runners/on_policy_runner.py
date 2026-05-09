@@ -169,19 +169,6 @@ class OnPolicyRunner:
         self.alg.eval_mode()  # Switch to evaluation mode (e.g. for dropout)
         return self.alg.get_policy().to(device)  # type: ignore
 
-    def export_policy_to_jit(self, path: str, filename: str = "policy.pt") -> None:
-        """Export the model to a Torch JIT file."""
-        jit_model = self.alg.get_policy().as_jit()
-        jit_model.to("cpu")
-
-        if not os.path.exists(path):
-            os.makedirs(path, exist_ok=True)
-        save_path = os.path.join(path, filename)
-
-        # Trace and save the model
-        traced_model = torch.jit.script(jit_model)
-        traced_model.save(save_path)
-
     def export_policy_to_onnx(self, path: str, filename: str = "policy.onnx", verbose: bool = False) -> None:
         """Export the model into an ONNX file."""
         onnx_model = self.alg.get_policy().as_onnx(verbose=verbose)

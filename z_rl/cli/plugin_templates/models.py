@@ -15,8 +15,9 @@ from z_rl.models.composition import ComposableModel, HeadSpec, LatentSpec
 class _MyLatentAdapter(nn.Module):
     \"\"\"Example latent adapter.
 
-    Latent adapters operate on the model latent input tensor and should stay exportable
-    for runtime, JIT, and ONNX paths. This example keeps the latent dimensionality unchanged.
+    Latent adapters operate on structured observations by default and should provide a tensor-only
+    `as_export_module()` when custom ONNX export behavior is needed. This example keeps the latent
+    dimensionality unchanged through the legacy flat-tensor compatibility path.
     \"\"\"
 
     def forward(self, x):

@@ -18,11 +18,13 @@ OBS_GROUPS = {"actor": ["policy"]}
 
 
 class _ProjectLatent(nn.Module):
-    def __init__(self, in_dim: int, out_dim: int) -> None:
+    def __init__(self, obs_groups: list[str], in_dim: int, out_dim: int) -> None:
         super().__init__()
+        self.obs_groups = obs_groups
         self.linear = nn.Linear(in_dim, out_dim)
 
-    def forward(self, x):
+    def forward(self, obs):
+        x = torch.cat([obs[group] for group in self.obs_groups], dim=-1)
         return self.linear(x)
 
 
@@ -35,7 +37,7 @@ class _LatentSpec(LatentSpec):
         self.validated_model = model
 
     def build_latent_adapter(self, model: nn.Module) -> nn.Module:
-        return _ProjectLatent(model.input_dim, self.latent_dim)
+        return _ProjectLatent(model.obs_groups, model.input_dim, self.latent_dim)
 
     def get_latent_dim(self, model: nn.Module) -> int:
         del model

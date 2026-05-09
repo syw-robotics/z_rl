@@ -153,7 +153,7 @@ class TestEncoderSpec:
         )
 
         latent = model.get_latent(obs)
-        encoded = model.latent_adapter.obs_normalizer(obs["policy"])
+        encoded = model.latent_adapter.encoder(model.latent_adapter.obs_normalizer(obs["policy"]))
 
         assert latent.shape == (2, 5)
         assert torch.allclose(latent, encoded)
@@ -175,10 +175,11 @@ class TestEncoderSpec:
         )
 
         latent = model.get_latent(obs)
-        encoded = model.latent_adapter.obs_normalizer(obs["policy"])
+        normalized = model.latent_adapter.obs_normalizer(obs["policy"])
+        encoded = model.latent_adapter.encoder(normalized)
 
         assert latent.shape == (2, 7)
-        assert torch.allclose(latent, encoded)
+        assert torch.allclose(latent[:, :5], encoded)
         assert torch.allclose(latent[:, 5:], obs["policy"][:, 6:8])
 
     def test_encoder_requires_policy_only_obs_group(self) -> None:

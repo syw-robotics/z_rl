@@ -30,9 +30,9 @@ class OnPolicyRunner:
         self.device = device
 
         # Log environment information
-        print("[OnPolicyRunner] observation_space: ", self.env.observation_space)
-        print("[OnPolicyRunner] action_space: ", self.env.action_space)
-        print("[OnPolicyRunner] obs_format: ", self.env.obs_format)
+        print("[OnPolicyRunner] observation_space: ", getattr(self.env, "observation_space", None))
+        print("[OnPolicyRunner] action_space: ", getattr(self.env, "action_space", None))
+        print("[OnPolicyRunner] obs_format: ", getattr(self.env, "obs_format", None))
         # the belows are for debugging observation infos
         #  print("[OnPolicyRunner] obs_group_time_slice_map: ", self.env.obs_group_time_slice_map)
         #  print("[OnPolicyRunner] obs_group_layout_mode_map: ", self.env.obs_group_layout_mode_map)

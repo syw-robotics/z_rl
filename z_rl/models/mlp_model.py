@@ -269,9 +269,12 @@ class _FlatNormalizedLatentAdapterExporter(nn.Module):
 
 
 def _as_export_latent_adapter(latent_adapter: nn.Module) -> nn.Module:
+    """Return a tensor-only copy of a runtime latent adapter for ONNX export."""
     export_adapter = getattr(latent_adapter, "as_export_module", None)
     if export_adapter is not None:
         return copy.deepcopy(export_adapter())
+    # Fallback is intentionally narrow: custom adapters without as_export_module()
+    # must already accept the flat tensor passed by the ONNX wrapper.
     return copy.deepcopy(latent_adapter)
 
 

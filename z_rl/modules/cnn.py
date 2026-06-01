@@ -147,7 +147,7 @@ class CNN(nn.Sequential):
         """Get the output height and width or total output dimension if output is flattened."""
         return self._output_dim
 
-    def init_weights(self) -> None:
+    def init_cnn_weights(self) -> None:
         """Initialize the weights of the CNN with Kaiming initialization."""
         for idx, module in enumerate(self):
             if isinstance(module, nn.Conv2d):

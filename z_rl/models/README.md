@@ -18,19 +18,18 @@ Predefined variants live in [`variants/`](https://github.com/syw-robotics/z_rl/t
 
 ## Export Logic
 
-`MLPModel` export follows the runtime structure:
+Z-RL keeps policy export ONNX-only. `MLPModel` export follows the runtime structure while using a tensor-only adapter:
 
 ```text
-normalized input -> latent_adapter -> head -> deterministic_output
+flat ONNX input -> latent_adapter.as_export_module() -> head -> deterministic_output
 ```
 
 Export entry points:
 
-- `model.as_jit()`
 - `model.as_onnx(...)`
 
-For `MLPModel`-based models, both latent and head customization stay export-friendly because export wrappers copy
-`latent_adapter` and `head`.
+Runtime latent adapters consume the structured observation `TensorDict`. If a custom adapter is not directly compatible
+with the flat tensor passed by ONNX export, implement `as_export_module()` on the adapter and return a tensor-only module.
 
 ## Composition API
 
@@ -58,6 +57,9 @@ model = ComposableModel(
 - `build_latent_adapter(model)`
 - `get_latent_dim(model)`
 
+The adapter returned by `build_latent_adapter(model)` should implement `forward(obs: TensorDict)`. It may also implement
+`update_normalization(obs)` when it owns normalization statistics.
+
 `HeadSpec` defines:
 
 - `validate(model)`
@@ -77,4 +79,5 @@ than under `composition/`.
 
 - Keep runtime and export structure aligned.
 - Prefer adapter modules over ad-hoc `forward()` logic.
+- Keep normalization owned by the adapter that consumes the corresponding observations.
 - When changing composition contracts, update this README and `z_rl/cli/plugin_templates/models.py`.

@@ -144,6 +144,10 @@ When creating a new PPO variant, the intended workflow is:
 The shared `ComposablePPO.construct_algorithm(...)` builder handles actor/critic/storage assembly so variants do not
 need to duplicate PPO construction boilerplate.
 
+If a PPO variant needs custom rollout actions, override `act(obs)` in the `ComposablePPO` subclass. The inherited
+implementation uses the standard PPO rollout behavior: sample `actor(obs, stochastic_output=True)`, evaluate the
+critic, and record the matching log probability and distribution parameters.
+
 ## Reference Implementations
 
 Use these files as the canonical examples:

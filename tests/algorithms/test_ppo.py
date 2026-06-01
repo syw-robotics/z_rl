@@ -224,7 +224,6 @@ class TestTimeoutBootstrapping:
         stored_reward_env1 = ppo.storage.rewards[0, 1, 0].item()
         assert abs(stored_reward_env1 - 1.0) < 1e-5
 
-
 class TestPPOLosses:
     """Tests for PPO loss computation correctness."""
 

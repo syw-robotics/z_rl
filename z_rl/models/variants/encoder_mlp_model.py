@@ -46,7 +46,12 @@ class MLPEncoderLatentSpec(LatentSpec):
     def build_latent_adapter(self, model: nn.Module) -> nn.Module:
         """Build the encoder adapter and cache the optional last-frame selector once."""
         encoder = MLP(model.obs_dim, self.latent_dim, self.encoder_hidden_dims, self.activation)
-        return _EncoderLatentAdapter(encoder=encoder, last_obs_selector=self.last_obs_selector)
+        return _EncoderLatentAdapter(
+            obs_group="policy",
+            obs_normalizer=model._build_obs_normalizer(model.obs_normalization),
+            encoder=encoder,
+            last_obs_selector=self.last_obs_selector,
+        )
 
     def get_latent_dim(self, model: nn.Module) -> int:
         """Return the encoder latent size plus the optional appended last-frame width."""
@@ -59,14 +64,56 @@ class MLPEncoderLatentSpec(LatentSpec):
 class _EncoderLatentAdapter(nn.Module):
     """Latent adapter that encodes the active observation group and optionally appends the last frame."""
 
-    def __init__(self, encoder: nn.Module, last_obs_selector: ObsSelector | None = None) -> None:
+    def __init__(
+        self,
+        obs_group: str,
+        obs_normalizer: nn.Module,
+        encoder: nn.Module,
+        last_obs_selector: ObsSelector | None = None,
+    ) -> None:
         """Store the encoder and the optional cached selector for the last observation frame."""
         super().__init__()
+        self.obs_group = obs_group
+        self.obs_normalizer = obs_normalizer
+        self.encoder = encoder
+        self.last_obs_selector = last_obs_selector
+
+    def forward(self, obs: TensorDict) -> torch.Tensor:
+        """Normalize and encode the configured observation group."""
+        x = self.obs_normalizer(obs[self.obs_group])
+        latent = self.encoder(x)
+        if self.last_obs_selector is None:
+            return latent
+        last_obs = self.last_obs_selector.select(x)
+        return torch.cat([latent, last_obs], dim=-1)
+
+    def update_normalization(self, obs: TensorDict) -> None:
+        """Update running normalization statistics for the encoded observation group."""
+        update = getattr(self.obs_normalizer, "update", None)
+        if update is not None:
+            update(obs[self.obs_group])
+
+    def as_export_module(self) -> nn.Module:
+        """Return a tensor-only adapter for ONNX export."""
+        return _EncoderLatentAdapterExporter(
+            obs_normalizer=self.obs_normalizer,
+            encoder=self.encoder,
+            last_obs_selector=self.last_obs_selector,
+        )
+
+
+class _EncoderLatentAdapterExporter(nn.Module):
+    """Tensor-only export adapter for encoder latents."""
+
+    def __init__(self, obs_normalizer: nn.Module, encoder: nn.Module, last_obs_selector: ObsSelector | None) -> None:
+        super().__init__()
+        self.obs_normalizer = obs_normalizer
         self.encoder = encoder
         self.last_obs_selector = last_obs_selector
 
     def forward(self, x: torch.Tensor) -> torch.Tensor:
-        """Encode the normalized observation and optionally concatenate the cached last frame."""
+        """Normalize and encode a pre-selected observation tensor."""
+        x = self.obs_normalizer(x)
         latent = self.encoder(x)
         if self.last_obs_selector is None:
             return latent
@@ -77,7 +124,7 @@ class _EncoderLatentAdapter(nn.Module):
 class EncoderMLPModel(ComposableModel):
     """MLPModel variant whose latent is produced by ``MLPEncoderLatentSpec``.
 
-    Data flow: ``policy obs -> (normalization) -> encoder MLP -> [optional last obs concat] -> head -> (distribution) -> output``.
+    Data flow: ``obs TensorDict -> adapter normalizes policy obs -> encoder MLP -> optional last obs concat -> head``.
     """
 
     def __init__(

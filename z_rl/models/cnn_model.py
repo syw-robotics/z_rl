@@ -12,7 +12,7 @@ import torch.nn as nn
 from tensordict import TensorDict
 from typing import Any
 
-from z_rl.models.mlp_model import MLPModel
+from z_rl.models.mlp_model import MLPModel, _as_export_latent_adapter
 from z_rl.modules import CNN, HiddenState, MLP
 from z_rl.utils import resolve_nn_activation
 
@@ -20,7 +20,7 @@ from z_rl.utils import resolve_nn_activation
 class CNNModel(MLPModel):
     """CNN-based neural model.
 
-    Data flow: ``obs groups -> (split 1D/2D) -> (concat 1D -> normalization) + (CNN encodes for 2D) -> optional projection MLP -> concat latent -> head -> (distribution) -> output``.
+    Data flow: ``obs TensorDict -> latent adapter for 1D groups + CNN branches for 2D groups -> head``.
 
     This model uses one or more convolutional neural network (CNN) encoders to process one or more 2D observation groups
     before passing the resulting latent to an MLP. Any 1D observation groups are directly concatenated with the CNN
@@ -57,7 +57,8 @@ class CNNModel(MLPModel):
             cnn_cfg: Configuration of the CNN encoder(s).
             cnn_projection_cfg: Optional configuration of projection MLP(s) applied after the flattened CNN output(s).
             cnns: CNN modules to use, e.g., for sharing CNNs between actor and critic. If None, new CNNs are created.
-            cnn_projectors: Projection modules to use, e.g., for sharing projected CNN branches between actor and critic.
+            cnn_projectors: Projection modules to use, e.g., for sharing projected CNN branches between actor and
+                critic.
         """
         # Resolve observation groups and dimensions
         self._get_obs_dim(obs, obs_groups, obs_set)
@@ -138,10 +139,6 @@ class CNNModel(MLPModel):
         # Concatenate 1D and CNN latents
         return torch.cat([latent_1d, latent_cnn], dim=-1)
 
-    def as_jit(self) -> nn.Module:
-        """Return a version of the model compatible with Torch JIT export."""
-        return _TorchCNNModel(self)
-
     def as_onnx(self, verbose: bool = False) -> nn.Module:
         """Return a version of the model compatible with ONNX export."""
         return _OnnxCNNModel(self, verbose)
@@ -192,7 +189,9 @@ class CNNModel(MLPModel):
         if not all(isinstance(v, dict) for v in cnn_projection_cfg.values()):
             cnn_projection_cfg = {group: cnn_projection_cfg for group in self.obs_groups_2d}
         if len(cnn_projection_cfg) != len(self.obs_groups_2d):
-            raise ValueError("The number of CNN projection configurations must match the number of 2D observation groups.")
+            raise ValueError(
+                "The number of CNN projection configurations must match the number of 2D observation groups."
+            )
 
         projectors = {}
         for obs_group in self.obs_groups_2d:
@@ -237,42 +236,6 @@ class CNNModel(MLPModel):
         raise ValueError("Unable to determine the output dimension of the CNN projector.")
 
 
-class _TorchCNNModel(nn.Module):
-    """Exportable CNN model for JIT."""
-
-    def __init__(self, model: CNNModel) -> None:
-        """Create a TorchScript-friendly copy of a CNNModel."""
-        super().__init__()
-        self.obs_normalizer = copy.deepcopy(model.obs_normalizer)
-        # Convert ModuleDict to ModuleList for ordered iteration
-        self.cnns = nn.ModuleList([copy.deepcopy(model.cnns[g]) for g in model.obs_groups_2d])
-        self.cnn_projectors = nn.ModuleList([copy.deepcopy(model.cnn_projectors[g]) for g in model.obs_groups_2d])
-        self.head = copy.deepcopy(model.head)
-        if model.distribution is not None:
-            self.deterministic_output = model.distribution.as_deterministic_output_module()
-        else:
-            self.deterministic_output = nn.Identity()
-
-    def forward(self, obs_1d: torch.Tensor, obs_2d: list[torch.Tensor]) -> torch.Tensor:
-        """Run deterministic inference from separated 1D and 2D inputs."""
-        latent_1d = self.obs_normalizer(obs_1d)
-
-        latent_cnn_list = []
-        for i, cnn in enumerate(self.cnns):  # We assume obs_2d list matches the order of obs_groups_2d
-            latent_cnn_list.append(self.cnn_projectors[i](cnn(obs_2d[i])))
-
-        latent_cnn = torch.cat(latent_cnn_list, dim=-1)
-        latent = torch.cat([latent_1d, latent_cnn], dim=-1)
-
-        out = self.head(latent)
-        return self.deterministic_output(out)
-
-    @torch.jit.export
-    def reset(self) -> None:
-        """Reset recurrent export state (no-op for CNN exports)."""
-        pass
-
-
 class _OnnxCNNModel(nn.Module):
     """Exportable CNN model for ONNX."""
 
@@ -280,7 +243,7 @@ class _OnnxCNNModel(nn.Module):
         """Create an ONNX-export wrapper around a CNNModel."""
         super().__init__()
         self.verbose = verbose
-        self.obs_normalizer = copy.deepcopy(model.obs_normalizer)
+        self.latent_adapter = _as_export_latent_adapter(model.latent_adapter)
         # Convert ModuleDict to ModuleList for ordered iteration
         self.cnns = nn.ModuleList([copy.deepcopy(model.cnns[g]) for g in model.obs_groups_2d])
         self.cnn_projectors = nn.ModuleList([copy.deepcopy(model.cnn_projectors[g]) for g in model.obs_groups_2d])
@@ -297,7 +260,7 @@ class _OnnxCNNModel(nn.Module):
 
     def forward(self, obs_1d: torch.Tensor, *obs_2d: torch.Tensor) -> torch.Tensor:
         """Run deterministic inference for ONNX export."""
-        latent_1d = self.obs_normalizer(obs_1d)
+        latent_1d = self.latent_adapter(obs_1d)
 
         latent_cnn_list = []
         for i, cnn in enumerate(self.cnns):

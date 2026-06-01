@@ -80,11 +80,14 @@ python -m pip install -e .
 
 ## 📋 TODOs
 
-- ✅ Added and tested `MoEModel` as a Model extension example
-- ✅ Added and tested `EncoderEstimationPPO` as a PPO extention example
-- ❌ Separate a function to get the actions for `RolloutStorage.Transition()`, `ppo.py` line 130 and `distillation.py` line 93
-- ❌ Reorganize `RNNModel` and `CNNModel` in the `ComposableModel` manner
-<!-- - ❌ Reorganize `distillation.py` for code clarity -->
+- ✅ Added and tested `MoEModel` as a model extension example
+- ✅ Added and tested `EncoderEstimationPPO` as a PPO extension example
+- ✅ Keep deployment/export ONNX-only and remove TorchScript export paths
+- ✅ Clarify latent adapter runtime/export contracts in model docs and plugin templates
+- ❌ Reorganize `RNNModel`/`CNNModel` further into the composable latent-adapter style
+- ❌ Support multiple PPO loss specs for combining auxiliary objectives
+- ❌ Add ONNX deployment notes for MLP/RNN/CNN policies
+- ❌ Update tests after the adapter/export contract settles
 
 
 ## 📄 License

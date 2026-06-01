@@ -153,7 +153,7 @@ class TestEncoderSpec:
         )
 
         latent = model.get_latent(obs)
-        encoded = model.latent_adapter.encoder(obs["policy"])
+        encoded = model.latent_adapter.encoder(model.latent_adapter.obs_normalizer(obs["policy"]))
 
         assert latent.shape == (2, 5)
         assert torch.allclose(latent, encoded)
@@ -175,7 +175,8 @@ class TestEncoderSpec:
         )
 
         latent = model.get_latent(obs)
-        encoded = model.latent_adapter.encoder(obs["policy"])
+        normalized = model.latent_adapter.obs_normalizer(obs["policy"])
+        encoded = model.latent_adapter.encoder(normalized)
 
         assert latent.shape == (2, 7)
         assert torch.allclose(latent[:, :5], encoded)
@@ -198,72 +199,8 @@ class TestEncoderSpec:
 
 
 class TestMLPModelExport:
-    """Tests for JIT export fidelity."""
+    """Tests for ONNX export."""
 
-    def test_jit_export_model(self) -> None:
-        """JIT-exported model should produce deterministic outputs matching the original."""
-        actor, obs = _make_mlp_model(stochastic=True)
-        actor.eval()
-
-        original_output = actor(obs).detach()
-
-        jit_model = torch.jit.script(actor.as_jit())
-        obs_concat = torch.cat([obs[g] for g in actor.obs_groups], dim=-1)
-        jit_output = jit_model(obs_concat)
-
-        assert torch.allclose(original_output, jit_output, atol=1e-5), "JIT stochastic export should match original"
-
-    def test_jit_export_with_normalization(self) -> None:
-        """JIT export should preserve trained normalization statistics."""
-        model, obs = _make_mlp_model(stochastic=True, obs_normalization=True)
-        model.train()
-
-        for _ in range(50):
-            shifted_obs = TensorDict(
-                {"policy": torch.randn(NUM_ENVS, OBS_DIM) + 5.0},
-                batch_size=[NUM_ENVS],
-            )
-            model.update_normalization(shifted_obs)
-
-        model.eval()
-        jit_model = torch.jit.script(model.as_jit())
-
-        obs_concat = torch.cat([obs[g] for g in model.obs_groups], dim=-1)
-        original_output = model(obs)
-        jit_output = jit_model(obs_concat)
-
-        assert torch.allclose(original_output, jit_output, atol=1e-5)
-
-    def test_jit_export_with_encoder_spec(self) -> None:
-        """JIT export should preserve latent adapters installed by encoder specs."""
-        obs = make_obs(NUM_ENVS, OBS_DIM)
-        model = EncoderMLPModel(
-            obs,
-            OBS_GROUPS,
-            "actor",
-            NUM_ACTIONS,
-            hidden_dims=[32, 32],
-            distribution_cfg={
-                "class_name": "GaussianDistribution",
-                "init_std": 1.0,
-                "std_type": "scalar",
-            },
-            latent_dim=6,
-            encoder_hidden_dims=[12],
-            concat_last_obs=True,
-            obs_group_time_slice_map={"policy": {"last": slice(6, 8)}},
-        )
-        model.eval()
-
-        original_output = model(obs).detach()
-
-        jit_model = torch.jit.script(model.as_jit())
-        obs_concat = torch.cat([obs[g] for g in model.obs_groups], dim=-1)
-        jit_output = jit_model(obs_concat)
-
-        assert torch.allclose(original_output, jit_output, atol=1e-5)
-
-    @pytest.mark.filterwarnings("ignore:.*legacy TorchScript.*:DeprecationWarning")
     @pytest.mark.filterwarnings("ignore:.*will be removed.*:DeprecationWarning")
     def test_onnx_export_model(self) -> None:
         """ONNX-exported MLP model should be a valid ONNX graph with correct I/O names."""
@@ -289,7 +226,6 @@ class TestMLPModelExport:
             assert [i.name for i in loaded.graph.input] == ["obs"]
             assert [o.name for o in loaded.graph.output] == ["actions"]
 
-    @pytest.mark.filterwarnings("ignore:.*legacy TorchScript.*:DeprecationWarning")
     @pytest.mark.filterwarnings("ignore:.*will be removed.*:DeprecationWarning")
     def test_onnx_export_with_normalization(self) -> None:
         """ONNX export should produce a valid graph when obs normalization is enabled."""
@@ -320,7 +256,6 @@ class TestMLPModelExport:
             loaded = onnx.load(f.name)
             onnx.checker.check_model(loaded)
 
-    @pytest.mark.filterwarnings("ignore:.*legacy TorchScript.*:DeprecationWarning")
     @pytest.mark.filterwarnings("ignore:.*will be removed.*:DeprecationWarning")
     def test_onnx_export_with_encoder_spec(self) -> None:
         """ONNX export should include encoder-spec latent adapters without custom wrappers."""

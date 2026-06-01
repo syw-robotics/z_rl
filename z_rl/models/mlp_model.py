@@ -19,11 +19,11 @@ from z_rl.utils import ObsSelector, resolve_callable, unpad_trajectories
 class MLPModel(nn.Module):
     """MLP-based neural model.
 
-    Data flow: ``obs groups -> concat obs -> (normalization) -> head -> (distribution) -> output``.
+    Data flow: ``obs TensorDict -> latent adapter -> head -> (distribution) -> output``.
 
-    This model uses a simple multi-layer perceptron (MLP) to process 1D observation groups. Observations can be
-    normalized before being passed to the MLP. The output of the model can be either deterministic or
-    stochastic, in which case a distribution module is used to sample the outputs.
+    The default latent adapter preserves the historical behavior by concatenating active 1D observation groups and
+    optionally normalizing them. Custom latent adapters may instead consume the structured TensorDict directly before
+    returning the latent tensor consumed by the head.
     """
 
     is_recurrent: bool = False
@@ -94,13 +94,8 @@ class MLPModel(nn.Module):
     def get_latent(
         self, obs: TensorDict, masks: torch.Tensor | None = None, hidden_state: HiddenState = None
     ) -> torch.Tensor:
-        """Build the model latent by concatenating and normalizing selected observation groups."""
-        # Select and concatenate observations
-        obs_list = [obs[obs_group] for obs_group in self.obs_groups]
-        obs_tensor = torch.cat(obs_list, dim=-1)
-        # Normalize observations
-        normalized_obs_tensor = self.obs_normalizer(obs_tensor)
-        return self.latent_adapter(normalized_obs_tensor)
+        """Build the model latent from the structured observation TensorDict."""
+        return self.latent_adapter(obs)
 
     def reset(self, dones: torch.Tensor | None = None, hidden_state: HiddenState = None) -> None:
         """Reset the internal state for recurrent models (no-op)."""
@@ -144,22 +139,15 @@ class MLPModel(nn.Module):
         """Compute KL divergence between two parameterizations of the distribution."""
         return self.distribution.kl_divergence(old_params, new_params)
 
-    def as_jit(self) -> nn.Module:
-        """Return a version of the model compatible with Torch JIT export."""
-        return _TorchMLPModel(self)
-
     def as_onnx(self, verbose: bool) -> nn.Module:
         """Return a version of the model compatible with ONNX export."""
         return _OnnxMLPModel(self, verbose)
 
     def update_normalization(self, obs: TensorDict) -> None:
         """Update observation-normalization statistics from a batch of observations."""
-        if self.obs_normalization:
-            # Select and concatenate observations
-            obs_list = [obs[obs_group] for obs_group in self.obs_groups]
-            mlp_obs = torch.cat(obs_list, dim=-1)
-            # Update the normalizer parameters
-            self.obs_normalizer.update(mlp_obs)  # type: ignore
+        update = getattr(self.latent_adapter, "update_normalization", None)
+        if update is not None:
+            update(obs)
 
     def _get_obs_dim(self, obs: TensorDict, obs_groups: dict[str, list[str]], obs_set: str) -> tuple[list[str], int]:
         """Select active observation groups and compute observation dimension."""
@@ -187,9 +175,9 @@ class MLPModel(nn.Module):
     ) -> None:
         """Resolve observation metadata and build the normalization stage."""
         self.obs_groups, self.obs_dim = self._get_obs_dim(obs, obs_groups, obs_set)
+        self.input_dim = self.obs_dim
         self.obs_group_time_slice_map = obs_group_time_slice_map or {}
         self.obs_normalization = obs_normalization
-        self.obs_normalizer = self._build_obs_normalizer(obs_normalization)
 
     def _build_obs_normalizer(self, obs_normalization: bool) -> nn.Module:
         """Build the observation normalizer used before latent construction."""
@@ -210,8 +198,12 @@ class MLPModel(nn.Module):
         return distribution, distribution.input_dim
 
     def build_latent_adapter(self) -> nn.Module:
-        """Build the latent adapter applied after observation normalization."""
-        return _IdentityLatentAdapter()
+        """Build the latent adapter that maps observations to the head input."""
+        return _FlatNormalizedLatentAdapter(
+            obs_groups=self.obs_groups,
+            obs_dim=self.obs_dim,
+            obs_normalizer=self._build_obs_normalizer(self.obs_normalization),
+        )
 
     def build_head(
         self, input_dim: int, output_dim: int | list[int], hidden_dims: tuple[int, ...] | list[int], activation: str
@@ -224,45 +216,66 @@ class MLPModel(nn.Module):
         if self.distribution is not None:
             self.distribution.init_head_weights(self.head)
 
+    @property
+    def obs_normalizer(self) -> nn.Module:
+        """Return the normalizer owned by the latent adapter, when present."""
+        normalizer = getattr(self.latent_adapter, "obs_normalizer", None)
+        if normalizer is None:
+            raise AttributeError(f"{type(self.latent_adapter).__name__} does not expose 'obs_normalizer'.")
+        return normalizer
+
 
 """
 Export Utils
 """
 
 
-class _IdentityLatentAdapter(nn.Module):
-    """Default latent adapter that preserves the normalized latent."""
+class _FlatNormalizedLatentAdapter(nn.Module):
+    """Default latent adapter: active obs groups -> flat tensor -> optional normalization."""
 
-    def forward(self, x: torch.Tensor) -> torch.Tensor:
-        """Return the normalized latent unchanged."""
-        return x
-
-
-class _TorchMLPModel(nn.Module):
-    """Exportable MLP model for JIT."""
-
-    def __init__(self, model: MLPModel) -> None:
-        """Create a TorchScript-friendly copy of an MLPModel."""
+    def __init__(self, obs_groups: list[str], obs_dim: int, obs_normalizer: nn.Module) -> None:
         super().__init__()
-        self.obs_normalizer = copy.deepcopy(model.obs_normalizer)
-        self.latent_adapter = copy.deepcopy(model.latent_adapter)
-        self.head = copy.deepcopy(model.head)
-        if model.distribution is not None:
-            self.deterministic_output = model.distribution.as_deterministic_output_module()
-        else:
-            self.deterministic_output = nn.Identity()
+        self.obs_groups = obs_groups
+        self.obs_dim = obs_dim
+        self.obs_normalizer = obs_normalizer
+
+    def forward(self, obs: TensorDict) -> torch.Tensor:
+        """Concatenate configured observation groups and normalize the flat tensor."""
+        return self.obs_normalizer(self._flatten_obs(obs))
+
+    def update_normalization(self, obs: TensorDict) -> None:
+        """Update running normalization statistics from structured observations."""
+        if isinstance(self.obs_normalizer, EmpiricalNormalization):
+            self.obs_normalizer.update(self._flatten_obs(obs))
+
+    def as_export_module(self) -> nn.Module:
+        """Return a tensor-only latent adapter for ONNX export."""
+        return _FlatNormalizedLatentAdapterExporter(copy.deepcopy(self.obs_normalizer))
+
+    def _flatten_obs(self, obs: TensorDict) -> torch.Tensor:
+        return torch.cat([obs[obs_group] for obs_group in self.obs_groups], dim=-1)
+
+
+class _FlatNormalizedLatentAdapterExporter(nn.Module):
+    """Tensor-only export module for the default latent adapter."""
+
+    def __init__(self, obs_normalizer: nn.Module) -> None:
+        super().__init__()
+        self.obs_normalizer = obs_normalizer
 
     def forward(self, x: torch.Tensor) -> torch.Tensor:
-        """Run deterministic inference on pre-concatenated observations."""
-        normalized_x = self.obs_normalizer(x)
-        latent = self.latent_adapter(normalized_x)
-        out = self.head(latent)
-        return self.deterministic_output(out)
+        """Normalize a pre-concatenated observation tensor."""
+        return self.obs_normalizer(x)
 
-    @torch.jit.export
-    def reset(self) -> None:
-        """Reset recurrent export state (no-op for MLP exports)."""
-        pass
+
+def _as_export_latent_adapter(latent_adapter: nn.Module) -> nn.Module:
+    """Return a tensor-only copy of a runtime latent adapter for ONNX export."""
+    export_adapter = getattr(latent_adapter, "as_export_module", None)
+    if export_adapter is not None:
+        return copy.deepcopy(export_adapter())
+    # Fallback is intentionally narrow: custom adapters without as_export_module()
+    # must already accept the flat tensor passed by the ONNX wrapper.
+    return copy.deepcopy(latent_adapter)
 
 
 class _OnnxMLPModel(nn.Module):
@@ -274,8 +287,7 @@ class _OnnxMLPModel(nn.Module):
         """Create an ONNX-export wrapper around an MLPModel."""
         super().__init__()
         self.verbose = verbose
-        self.obs_normalizer = copy.deepcopy(model.obs_normalizer)
-        self.latent_adapter = copy.deepcopy(model.latent_adapter)
+        self.latent_adapter = _as_export_latent_adapter(model.latent_adapter)
         self.head = copy.deepcopy(model.head)
         if model.distribution is not None:
             self.deterministic_output = model.distribution.as_deterministic_output_module()
@@ -285,8 +297,7 @@ class _OnnxMLPModel(nn.Module):
 
     def forward(self, x: torch.Tensor) -> torch.Tensor:
         """Run deterministic inference for ONNX export."""
-        normalized_x = self.obs_normalizer(x)
-        latent = self.latent_adapter(normalized_x)
+        latent = self.latent_adapter(x)
         out = self.head(latent)
         return self.deterministic_output(out)
 

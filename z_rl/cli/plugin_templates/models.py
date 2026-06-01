@@ -7,6 +7,8 @@ MODELS_INIT_TEMPLATE = (
 
 MODELS_MODEL_TEMPLATE = """from __future__ import annotations
 
+import copy
+import torch
 import torch.nn as nn
 
 from z_rl.models.composition import ComposableModel, HeadSpec, LatentSpec
@@ -15,12 +17,28 @@ from z_rl.models.composition import ComposableModel, HeadSpec, LatentSpec
 class _MyLatentAdapter(nn.Module):
     \"\"\"Example latent adapter.
 
-    Latent adapters operate on the model latent input tensor and should stay exportable
-    for runtime, JIT, and ONNX paths. This example keeps the latent dimensionality unchanged.
+    Runtime adapters receive the structured observation TensorDict. ONNX export receives a flat tensor,
+    so custom adapters should provide `as_export_module()` when the runtime path is not already tensor-only.
     \"\"\"
 
-    def forward(self, x):
-        return x
+    def __init__(self, obs_groups: list[str], obs_normalizer: nn.Module) -> None:
+        super().__init__()
+        self.obs_groups = obs_groups
+        self.obs_normalizer = obs_normalizer
+
+    def forward(self, obs):
+        x = torch.cat([obs[group] for group in self.obs_groups], dim=-1)
+        return self.obs_normalizer(x)
+
+    def update_normalization(self, obs) -> None:
+        update = getattr(self.obs_normalizer, "update", None)
+        if update is not None:
+            x = torch.cat([obs[group] for group in self.obs_groups], dim=-1)
+            update(x)
+
+    def as_export_module(self) -> nn.Module:
+        # The ONNX wrapper passes the already-concatenated flat observation tensor.
+        return copy.deepcopy(self.obs_normalizer)
 
 
 class MyLatentSpec(LatentSpec):
@@ -36,8 +54,10 @@ class MyLatentSpec(LatentSpec):
         return None
 
     def build_latent_adapter(self, model) -> nn.Module:
-        # Replace this with your own exportable latent adapter.
-        return _MyLatentAdapter()
+        return _MyLatentAdapter(
+            obs_groups=model.obs_groups,
+            obs_normalizer=model._build_obs_normalizer(model.obs_normalization),
+        )
 
     def get_latent_dim(self, model) -> int:
         return model.obs_dim

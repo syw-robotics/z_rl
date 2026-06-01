@@ -4,7 +4,7 @@ build-backend = "setuptools.build_meta"
 
 [project]
 name = "z_rl"
-version = "0.0.2"
+version = "0.0.3"
 keywords = ["reinforcement-learning", "robotics"]
 maintainers = [
   { name="Siyuan Wang", email="syw@mail.sustech.edu.cn" },
@@ -32,6 +32,7 @@ dependencies = [
     "GitPython",
     "onnx",
     "onnxscript>=0.5.4",
+    "gradio"
 ]
 
 [project.urls]
@@ -40,6 +41,7 @@ Issues = "https://github.com/syw-robotics/z_rl/issues"
 
 [project.scripts]
 z-rl-plugin-init = "z_rl.cli.plugin_template:main"
+z-rl-checkpoint-key-editor = "z_rl.cli.checkpoint_key_editor:main"
 
 [tool.setuptools.packages.find]
 where = ["."]

@@ -131,7 +131,7 @@ def main() -> int:
         parser.exit(status=1, message=f"Error: {exc}\n")
 
     print(f"Created plugin template at: {root}")
-    print("Next step: cd into the project and run `uv pip install -e .`.")
+    print("Next step: cd into the project and run `python -m pip install -e .`.")
     return 0
 
 

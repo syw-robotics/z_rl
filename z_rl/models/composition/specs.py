@@ -6,7 +6,11 @@ import torch.nn as nn
 
 
 class LatentSpec(abc.ABC):
-    """Abstract base class for replacing the latent adapter of an ``MLPModel``-compatible model."""
+    """Abstract base class for replacing the latent adapter of an ``MLPModel``-compatible model.
+
+    Runtime latent adapters consume the structured observation ``TensorDict``. If an adapter needs different behavior
+    for ONNX export, it should expose ``as_export_module()`` returning a tensor-only module.
+    """
 
     @abc.abstractmethod
     def validate(self, model: nn.Module) -> None:
@@ -36,4 +40,3 @@ class HeadSpec(abc.ABC):
     def build_head(self, model: nn.Module, input_dim: int, output_dim: int, activation: str) -> nn.Module:
         """Build the output head installed on the model."""
         raise NotImplementedError
-

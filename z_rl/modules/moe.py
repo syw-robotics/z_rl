@@ -102,6 +102,7 @@ class _BatchedMLPExperts(nn.Module):
         self.biases = nn.ParameterList()
         self.num_experts = num_experts
         self.activation = resolve_nn_activation(activation)
+        self.num_layers = len(dims) - 1
 
         for in_dim, out_dim in zip(dims[:-1], dims[1:]):
             w = nn.Parameter(torch.empty(num_experts, in_dim, out_dim))
@@ -122,21 +123,18 @@ class _BatchedMLPExperts(nn.Module):
         Returns:
             Tensor with shape ``[..., num_experts, output_dim]``.
         """
-        original_shape = x.shape[:-1]
         h = x.reshape(-1, x.shape[-1])
 
-        # First layer: [B, in] x [E, in, out] -> [B, E, out]
-        h = torch.einsum("bi,eio->beo", h, self.weights[0]) + self.biases[0].unsqueeze(0)
-        h = self.activation(h)
+        for layer_idx, (weight, bias) in enumerate(zip(self.weights, self.biases)):
+            if layer_idx == 0:
+                h = torch.einsum("bi,eio->beo", h, weight) + bias.unsqueeze(0)
+            else:
+                h = torch.einsum("bei,eio->beo", h, weight) + bias.unsqueeze(0)
 
-        # Remaining layers: [B, E, in] x [E, in, out] -> [B, E, out]
-        for i in range(1, len(self.weights) - 1):
-            h = torch.einsum("bei,eio->beo", h, self.weights[i]) + self.biases[i].unsqueeze(0)
-            h = self.activation(h)
+            if layer_idx < self.num_layers - 1:
+                h = self.activation(h)
 
-        # Last linear layer without activation
-        h = torch.einsum("bei,eio->beo", h, self.weights[-1]) + self.biases[-1].unsqueeze(0)
-        return h.view(*original_shape, self.num_experts, h.shape[-1])
+        return h.reshape(x.shape[0], self.num_experts, h.shape[-1])
 
     @torch.no_grad()
     def init_distribution_heads(self, distribution: nn.Module) -> None:

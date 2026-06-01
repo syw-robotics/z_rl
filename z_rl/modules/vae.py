@@ -73,7 +73,8 @@ class VAE(nn.Module):
         """
         mu, log_var = self.encode(x)
         z = self.reparameterize(mu, log_var)
-        return z
+        output = self.decode(z)
+        return output
 
     @staticmethod
     def compute_loss(
@@ -83,7 +84,7 @@ class VAE(nn.Module):
         log_var: torch.Tensor,
         beta: float = 1.0,
         reduction: str = "mean",
-    ) -> tuple[torch.Tensor, torch.Tensor, torch.Tensor]:
+    ) -> tuple[torch.Tensor, torch.Tensor]:
         """Compute VAE loss = reconstruction loss + beta * KL divergence.
 
         Reconstruction loss uses MSE over the last dimension.
@@ -103,5 +104,4 @@ class VAE(nn.Module):
             recon_loss = recon_per_sample.sum()
             kl_loss = kl_per_sample.sum()
 
-        total_loss = recon_loss + beta * kl_loss
-        return total_loss, recon_loss, kl_loss
+        return recon_loss, kl_loss

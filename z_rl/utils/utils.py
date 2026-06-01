@@ -57,7 +57,7 @@ class ObsSelector:
 def resolve_obs_temporal_selector(
     obs_group_name: str,
     temporal_select_type: str,
-    obs_group_time_slice_map: dict[str, dict[str, ObsSelector]],
+    obs_group_time_slice_map: dict[str, dict[str, ObsSelector | slice | torch.Tensor]],
 ) -> ObsSelector:
     """Resolve the cached selector metadata."""
     if temporal_select_type not in obs_group_time_slice_map.get(obs_group_name, {}):
@@ -66,7 +66,11 @@ def resolve_obs_temporal_selector(
             " cached `obs_group_time_slice_map`. Available selectors are: "
             f"{list(obs_group_time_slice_map.get(obs_group_name, {}).keys())}"
         )
-    return obs_group_time_slice_map[obs_group_name][temporal_select_type]
+    selector = obs_group_time_slice_map[obs_group_name][temporal_select_type]
+    if isinstance(selector, ObsSelector):
+        return selector
+    return ObsSelector(selector)
+
 
 def resolve_target_obs_term_selector(
     target_obs_group_name: str,

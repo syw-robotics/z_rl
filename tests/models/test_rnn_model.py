@@ -169,68 +169,7 @@ class TestSequentialConsistency:
         )
 
 
-class TestRNNModelJITExport:
-    """Tests for JIT export fidelity of RNN models."""
-
-    @pytest.mark.parametrize("rnn_type", ["gru", "lstm"])
-    def test_jit_export_model(self, rnn_type: str) -> None:
-        """JIT export of an RNN model should produce deterministic outputs matching the original."""
-        obs = make_obs(1, OBS_DIM)
-        model = RNNModel(
-            obs,
-            {"actor": ["policy"]},
-            "actor",
-            NUM_ACTIONS,
-            hidden_dims=[32, 32],
-            activation="elu",
-            rnn_type=rnn_type,
-            rnn_hidden_dim=16,
-            rnn_num_layers=1,
-            distribution_cfg={"class_name": "GaussianDistribution", "init_std": 1.0, "std_type": "scalar"},
-        )
-        model.eval()
-
-        original_output = model(obs, stochastic_output=False).detach()
-
-        jit_model = torch.jit.script(model.as_jit())
-        jit_model.reset()
-        obs_concat = torch.cat([obs[g] for g in model.obs_groups], dim=-1)
-        jit_output = jit_model(obs_concat)
-
-        assert torch.allclose(original_output, jit_output, atol=1e-5), f"JIT stochastic export mismatch for {rnn_type}"
-
-    @pytest.mark.parametrize("rnn_type", ["gru", "lstm"])
-    def test_jit_export_sequential_consistency(self, rnn_type: str) -> None:
-        """JIT model should accumulate hidden state across steps, matching original multi-step behavior."""
-        obs = make_obs(1, OBS_DIM)
-        model = RNNModel(
-            obs,
-            {"actor": ["policy"]},
-            "actor",
-            NUM_ACTIONS,
-            hidden_dims=[32, 32],
-            activation="elu",
-            rnn_type=rnn_type,
-            rnn_hidden_dim=16,
-            rnn_num_layers=1,
-            distribution_cfg={"class_name": "GaussianDistribution", "init_std": 1.0, "std_type": "scalar"},
-        )
-        model.eval()
-
-        jit_model = torch.jit.script(model.as_jit())
-        jit_model.reset()
-        obs_concat = torch.cat([obs[g] for g in model.obs_groups], dim=-1)
-
-        for _ in range(3):
-            original_out = model(obs, stochastic_output=False).detach()
-            jit_out = jit_model(obs_concat)
-
-        assert torch.allclose(original_out, jit_out, atol=1e-5), f"JIT sequential mismatch for {rnn_type}"
-
-
-@pytest.mark.filterwarnings("ignore:.*legacy TorchScript.*:DeprecationWarning")
 @pytest.mark.filterwarnings("ignore:.*will be removed.*:DeprecationWarning")
-@pytest.mark.filterwarnings("ignore::torch.jit.TracerWarning")
 @pytest.mark.filterwarnings("ignore::UserWarning:torch.onnx")
 class TestRNNModelONNXExport:
     """Tests for ONNX export fidelity of RNN models."""

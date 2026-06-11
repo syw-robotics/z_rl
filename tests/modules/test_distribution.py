@@ -8,7 +8,7 @@
 import math
 import torch
 
-from z_rl.modules.distribution import GaussianDistribution, HeteroscedasticGaussianDistribution
+from z_rl.modules.distribution import BetaDistribution, GaussianDistribution, HeteroscedasticGaussianDistribution
 
 
 class TestGaussianDistribution:
@@ -96,6 +96,17 @@ class TestGaussianDistribution:
         assert mean.grad is not None, "Gradient should flow from log_prob to mean"
         assert not torch.all(mean.grad == 0), "Gradient should be non-zero"
 
+    def test_std_is_clamped(self) -> None:
+        """The learned std parameter should be clamped to the configured range."""
+        dist = GaussianDistribution(output_dim=2, init_std=10.0, std_range=(0.2, 0.5), std_type="scalar")
+        dist.update(torch.zeros(3, 2))
+        assert torch.allclose(dist.std, torch.full((3, 2), 0.5))
+
+    def test_fixed_std_does_not_require_grad(self) -> None:
+        """learn_std=False should keep the std parameter fixed."""
+        dist = GaussianDistribution(output_dim=2, init_std=0.7, learn_std=False)
+        assert dist.std_param.requires_grad is False
+
 
 class TestHeteroscedasticGaussianDistribution:
     """Tests for ``HeteroscedasticGaussianDistribution``."""
@@ -143,3 +154,36 @@ class TestHeteroscedasticGaussianDistribution:
         dist = HeteroscedasticGaussianDistribution(output_dim=dim)
         assert dist.input_dim == [2, dim]
 
+    def test_state_dependent_std_is_clamped(self) -> None:
+        """Network-produced std values should be clamped for numerical stability."""
+        dim = 2
+        dist = HeteroscedasticGaussianDistribution(output_dim=dim, std_range=(0.1, 0.3), std_type="scalar")
+        mean = torch.zeros(1, dim)
+        std = torch.tensor([[0.01, 1.0]])
+        dist.update(torch.stack([mean, std], dim=-2))
+        assert torch.allclose(dist.std, torch.tensor([[0.1, 0.3]]))
+
+
+class TestBetaDistribution:
+    """Tests for ``BetaDistribution``."""
+
+    def test_samples_are_in_action_range(self) -> None:
+        """Samples should be mapped to the configured action range."""
+        dist = BetaDistribution(output_dim=3, action_range=(-2.0, 2.0))
+        head_output = torch.zeros(128, 2, 3)
+        dist.update(head_output)
+        samples = dist.sample()
+        assert torch.all(samples >= -2.0)
+        assert torch.all(samples <= 2.0)
+
+    def test_deterministic_output_is_mapped_mean(self) -> None:
+        """Equal alpha and beta should produce the center of the action range."""
+        dist = BetaDistribution(output_dim=2, action_range=(-1.0, 3.0))
+        head_output = torch.zeros(4, 2, 2)
+        deterministic = dist.deterministic_output(head_output)
+        assert torch.allclose(deterministic, torch.ones(4, 2))
+
+    def test_input_dim_is_pair(self) -> None:
+        """The Head should output raw alpha and beta parameters."""
+        dist = BetaDistribution(output_dim=5)
+        assert dist.input_dim == [2, 5]

@@ -266,6 +266,17 @@ def check_nan(obs: TensorDict, rewards: torch.Tensor, dones: torch.Tensor) -> No
             " environment's termination logic."
         )
 
+def compile_model(model: torch.nn.Module, mode: str | None = None) -> torch.nn.Module:
+    """Compile a model when requested, rejecting CUDA-graph modes that break PPO-style multi-model calls."""
+    if mode is None:
+        return model
+    if mode in ("reduce-overhead", "max-autotune"):
+        raise ValueError(
+            f"torch_compile_mode='{mode}' uses CUDA graphs and is incompatible with the algorithm forward pattern. "
+            "Use 'default', 'max-autotune-no-cudagraphs', or None."
+        )
+    return torch.compile(model, mode=mode)  # type: ignore
+
 def split_and_pad_trajectories(
     tensor: torch.Tensor | TensorDict, dones: torch.Tensor
 ) -> tuple[torch.Tensor | TensorDict, torch.Tensor]:

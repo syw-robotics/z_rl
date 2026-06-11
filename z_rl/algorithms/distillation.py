@@ -13,7 +13,7 @@ from tensordict import TensorDict
 from z_rl.env import VecEnv
 from z_rl.models import MLPModel
 from z_rl.storage import RolloutStorage
-from z_rl.utils import inject_obs_time_slice_map, resolve_callable, resolve_obs_groups, resolve_optimizer
+from z_rl.utils import compile_model, inject_obs_time_slice_map, resolve_callable, resolve_obs_groups, resolve_optimizer
 
 
 def _pop_model_init_config(model_cfg: dict) -> tuple[float | tuple[float, ...] | None, bool | None]:
@@ -87,6 +87,8 @@ class Distillation:
         # Distillation components
         self.student = student.to(self.device)
         self.teacher = teacher.to(self.device)
+        self._raw_student = self.student
+        self._raw_teacher = self.teacher
 
         # Create the optimizer
         self.optimizer = resolve_optimizer(optimizer)(self.student.parameters(), lr=learning_rate)  # type: ignore
@@ -208,8 +210,8 @@ class Distillation:
     def save(self) -> dict:
         """Return a dict of all models for saving."""
         saved_dict = {
-            "student_state_dict": self.student.state_dict(),
-            "teacher_state_dict": self.teacher.state_dict(),
+            "student_state_dict": self._raw_student.state_dict(),
+            "teacher_state_dict": self._raw_teacher.state_dict(),
             "optimizer_state_dict": self.optimizer.state_dict(),
         }
         return saved_dict
@@ -229,9 +231,9 @@ class Distillation:
 
         # Load the specified models
         if load_cfg.get("student"):
-            self.student.load_state_dict(loaded_dict["student_state_dict"], strict=strict)
+            self._raw_student.load_state_dict(loaded_dict["student_state_dict"], strict=strict)
         if load_cfg.get("teacher"):
-            self.teacher.load_state_dict(
+            self._raw_teacher.load_state_dict(
                 loaded_dict.get("teacher_state_dict") or loaded_dict["actor_state_dict"], strict=strict
             )
             self.teacher_loaded = True
@@ -241,7 +243,12 @@ class Distillation:
 
     def get_policy(self) -> MLPModel:
         """Get the policy model."""
-        return self.student
+        return self._raw_student
+
+    def compile(self, mode: str | None = None) -> None:
+        """Compile student and teacher for training while keeping raw modules for checkpoints/export."""
+        self.student = compile_model(self._raw_student, mode)  # type: ignore
+        self.teacher = compile_model(self._raw_teacher, mode)  # type: ignore
 
     @staticmethod
     def construct_algorithm(obs: TensorDict, env: VecEnv, cfg: dict, device: str) -> Distillation:
@@ -288,18 +295,19 @@ class Distillation:
         alg: Distillation = alg_class(
             student, teacher, storage, device=device, **cfg["algorithm"], multi_gpu_cfg=cfg["multi_gpu"]
         )
+        alg.compile(cfg.get("torch_compile_mode"))
 
         return alg
 
     def broadcast_parameters(self) -> None:
         """Broadcast model parameters to all GPUs."""
         # Obtain the model parameters on current GPU
-        model_params = [self.student.state_dict(), self.teacher.state_dict()]
+        model_params = [self._raw_student.state_dict(), self._raw_teacher.state_dict()]
         # Broadcast the model parameters
         torch.distributed.broadcast_object_list(model_params, src=0)
         # Load the model parameters on all GPUs from source GPU
-        self.student.load_state_dict(model_params[0])
-        self.teacher.load_state_dict(model_params[1])
+        self._raw_student.load_state_dict(model_params[0])
+        self._raw_teacher.load_state_dict(model_params[1])
 
     def reduce_parameters(self) -> None:
         """Collect gradients from all GPUs and average them.

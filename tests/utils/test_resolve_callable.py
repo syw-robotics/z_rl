@@ -124,6 +124,11 @@ class TestResolveCallableSimpleName:
 
         assert result is PPO
 
+    def test_simple_logger_writer_names(self) -> None:
+        """Should resolve optional logger writers without initializing external services."""
+        assert resolve_callable("WandbLogWriter").__name__ == "WandbLogWriter"
+        assert resolve_callable("NeptuneLogWriter").__name__ == "NeptuneLogWriter"
+
     def test_simple_name_unknown(self) -> None:
         """Should raise ValueError for unknown simple names."""
         with pytest.raises(ValueError, match="Could not resolve"):

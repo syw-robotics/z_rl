@@ -402,8 +402,8 @@ class ZRlBaseRunnerCfg:
     ``{time-stamp}_{run_name}``.
     """
 
-    logger: Literal["tensorboard", "neptune", "wandb"] = "tensorboard"
-    """The logger to use. Defaults to tensorboard."""
+    logger: Literal["tensorboard", "neptune", "wandb"] | dict = "tensorboard"
+    """The logger to use. Defaults to tensorboard. Dict configs may specify a custom LogWriter."""
 
     neptune_project: str = "isaaclab"
     """The neptune project name. Defaults to "isaaclab"."""

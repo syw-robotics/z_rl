@@ -8,29 +8,39 @@ from __future__ import annotations
 
 import os
 from dataclasses import asdict
-from torch.utils.tensorboard import SummaryWriter
+
+from z_rl.utils.log_writer import LogWriter
 
 try:
     import neptune
 except ModuleNotFoundError:
-    raise ModuleNotFoundError("neptune-client is required to log to Neptune.") from None
+    neptune = None
 
 
-class NeptuneSummaryWriter(SummaryWriter):
+class NeptuneLogWriter(LogWriter):
     """Summary writer for Neptune."""
 
-    def __init__(self, log_dir: str, flush_secs: int, cfg: dict) -> None:
+    def __init__(
+        self,
+        log_dir: str,
+        project_name: str | None = None,
+        flush_secs: int = 10,
+        cfg: dict | None = None,
+    ) -> None:
         """Initialize a Neptune run for logging."""
-        super().__init__(log_dir, flush_secs=flush_secs)
+        if neptune is None:
+            raise ModuleNotFoundError("neptune-client is required to log to Neptune.")
+        from torch.utils.tensorboard import SummaryWriter
+
+        self.tensorboard_writer = SummaryWriter(log_dir, flush_secs=flush_secs)
 
         # Get the run name
         run_name = os.path.split(log_dir)[-1]
 
-        # Get neptune project and entity
-        try:
-            project = cfg["neptune_project"]
-        except KeyError:
-            raise KeyError("Please specify neptune_project in the runner config, e.g. legged_gym.") from None
+        # Old callers pass cfg["neptune_project"]; new callers pass project_name directly.
+        project = project_name or (cfg or {}).get("neptune_project")
+        if project is None:
+            raise KeyError("Please specify Neptune project_name in logger config.")
         try:
             token = os.environ["NEPTUNE_API_TOKEN"]
         except KeyError:
@@ -72,7 +82,7 @@ class NeptuneSummaryWriter(SummaryWriter):
         new_style: bool = False,
     ) -> None:
         """Log a scalar to both TensorBoard and Neptune."""
-        super().add_scalar(
+        self.tensorboard_writer.add_scalar(
             tag,
             scalar_value,
             global_step=global_step,
@@ -83,6 +93,7 @@ class NeptuneSummaryWriter(SummaryWriter):
 
     def stop(self) -> None:
         """Finish the active Neptune run."""
+        self.tensorboard_writer.close()
         self.run.stop()
 
     def save_model(self, model_path: str, it: int) -> None:
@@ -100,3 +111,6 @@ class NeptuneSummaryWriter(SummaryWriter):
             return self.name_map[path]
         else:
             return path
+
+
+NeptuneSummaryWriter = NeptuneLogWriter

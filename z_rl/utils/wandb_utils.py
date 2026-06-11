@@ -9,29 +9,39 @@ from __future__ import annotations
 import os
 import pathlib
 from dataclasses import asdict
-from torch.utils.tensorboard import SummaryWriter
+
+from z_rl.utils.log_writer import LogWriter
 
 try:
     import wandb
 except ModuleNotFoundError:
-    raise ModuleNotFoundError("wandb package is required to log to Weights and Biases.") from None
+    wandb = None
 
 
-class WandbSummaryWriter(SummaryWriter):
+class WandbLogWriter(LogWriter):
     """Summary writer for W&B."""
 
-    def __init__(self, log_dir: str, flush_secs: int, cfg: dict) -> None:
+    def __init__(
+        self,
+        log_dir: str,
+        project_name: str | None = None,
+        flush_secs: int = 10,
+        cfg: dict | None = None,
+    ) -> None:
         """Initialize a W&B run for logging."""
-        super().__init__(log_dir, flush_secs=flush_secs)
+        if wandb is None:
+            raise ModuleNotFoundError("wandb package is required to log to Weights and Biases.")
+        from torch.utils.tensorboard import SummaryWriter
+
+        self.tensorboard_writer = SummaryWriter(log_dir, flush_secs=flush_secs)
 
         # Get the run name
         run_name = os.path.split(log_dir)[-1]
 
-        # Get wandb project and entity
-        try:
-            project = cfg["wandb_project"]
-        except KeyError:
-            raise KeyError("Please specify wandb_project in the runner config, e.g. legged_gym.") from None
+        # Old callers pass cfg["wandb_project"]; new callers pass project_name directly.
+        project = project_name or (cfg or {}).get("wandb_project")
+        if project is None:
+            raise KeyError("Please specify W&B project_name in logger config.")
         try:
             entity = os.environ["WANDB_USERNAME"]
         except KeyError:
@@ -66,7 +76,7 @@ class WandbSummaryWriter(SummaryWriter):
         new_style: bool = False,
     ) -> None:
         """Log a scalar to both TensorBoard and W&B."""
-        super().add_scalar(
+        self.tensorboard_writer.add_scalar(
             tag,
             scalar_value,
             global_step=global_step,
@@ -77,6 +87,7 @@ class WandbSummaryWriter(SummaryWriter):
 
     def stop(self) -> None:
         """Finish the active W&B run."""
+        self.tensorboard_writer.close()
         wandb.finish()
 
     def save_model(self, model_path: str, it: int) -> None:
@@ -92,3 +103,6 @@ class WandbSummaryWriter(SummaryWriter):
         if video.name not in self.logged_videos:
             wandb.log({"video": wandb.Video(str(video), format="mp4")}, step=it)
             self.logged_videos.add(video.name)
+
+
+WandbSummaryWriter = WandbLogWriter

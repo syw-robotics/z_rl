@@ -128,14 +128,16 @@ class CNNModel(MLPModel):
     def get_latent(
         self, obs: TensorDict, masks: torch.Tensor | None = None, hidden_state: HiddenState = None
     ) -> torch.Tensor:
-        """Build the model latent by combining normalized 1D and CNN-encoded 2D observation groups."""
-        # Concatenate 1D observation groups and normalize
-        latent_1d = super().get_latent(obs)
+        """Build the model latent by combining optional 1D and CNN-encoded 2D observation groups."""
         # Process 2D observation groups with CNNs
         latent_cnn_list = [
             self.cnn_projectors[obs_group](self.cnns[obs_group](obs[obs_group])) for obs_group in self.obs_groups_2d
         ]
         latent_cnn = torch.cat(latent_cnn_list, dim=-1)
+        if not self.obs_groups:
+            return latent_cnn
+        # Concatenate 1D observation groups and normalize
+        latent_1d = super().get_latent(obs)
         # Concatenate 1D and CNN latents
         return torch.cat([latent_1d, latent_cnn], dim=-1)
 

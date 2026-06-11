@@ -26,6 +26,20 @@ def _make_storage_and_obs() -> tuple:
     return storage, obs
 
 
+def test_observation_storage_preserves_dtype() -> None:
+    """Observation buffers should preserve the environment-provided dtype."""
+    obs = TensorDict(
+        {
+            "policy": torch.zeros(NUM_ENVS, OBS_DIM, dtype=torch.float32),
+            "ids": torch.zeros(NUM_ENVS, 2, dtype=torch.long),
+        },
+        batch_size=[NUM_ENVS],
+    )
+    storage = RolloutStorage("rl", NUM_ENVS, NUM_STEPS, obs, [NUM_ACTIONS])
+    assert storage.observations["policy"].dtype == torch.float32
+    assert storage.observations["ids"].dtype == torch.long
+
+
 def _fill_with_identifiable_data(storage: RolloutStorage, obs: TensorDict) -> dict:
     """Fill storage with data where each transition has a unique identifier.
 

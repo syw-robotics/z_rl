@@ -14,10 +14,10 @@ from tensordict import TensorDict
 from collections import defaultdict
 
 from z_rl.env import VecEnv
-from z_rl.extensions import resolve_symmetry_config
+from z_rl.extensions import Symmetry, resolve_symmetry_config
 from z_rl.models import MLPModel
 from z_rl.storage import RolloutStorage
-from z_rl.utils import inject_obs_time_slice_map, resolve_callable, resolve_obs_groups, resolve_optimizer
+from z_rl.utils import compile_model, inject_obs_time_slice_map, resolve_callable, resolve_obs_groups, resolve_optimizer
 
 
 class PPO:
@@ -71,32 +71,18 @@ class PPO:
             self.gpu_global_rank = 0
             self.gpu_world_size = 1
 
-        # Symmetry components
-        if symmetry_cfg is not None:
-            # Check if symmetry is enabled
-            use_symmetry = symmetry_cfg["use_data_augmentation"] or symmetry_cfg["use_mirror_loss"]
-            # Print that we are not using symmetry
-            if not use_symmetry:
-                print("Symmetry not used for learning. We will use it for logging instead.")
-            # Resolve the data augmentation function (supports string names or direct callables)
-            symmetry_cfg["data_augmentation_func"] = resolve_callable(symmetry_cfg["data_augmentation_func"])
-            # Check valid configuration
-            if not callable(symmetry_cfg["data_augmentation_func"]):
-                raise ValueError(
-                    f"Symmetry configuration exists but the function is not callable: "
-                    f"{symmetry_cfg['data_augmentation_func']}"
-                )
-            # Check if the policy is compatible with symmetry
-            if actor.is_recurrent or critic.is_recurrent:
-                raise ValueError("Symmetry augmentation is not supported for recurrent policies.")
-            # Store symmetry configuration
-            self.symmetry = symmetry_cfg
-        else:
-            self.symmetry = None
+        # Symmetry extension
+        if symmetry_cfg is not None and (actor.is_recurrent or critic.is_recurrent):
+            raise ValueError("Symmetry augmentation is not supported for recurrent policies.")
+        self.symmetry = Symmetry(**symmetry_cfg) if symmetry_cfg else None
+        if self.symmetry is not None:
+            self.mirror_loss_coef = self.symmetry.mirror_loss_coeff
 
         # PPO components
         self.actor = actor.to(self.device)
         self.critic = critic.to(self.device)
+        self._raw_actor = self.actor
+        self._raw_critic = self.critic
 
         # Create the optimizer
         self.optimizer = resolve_optimizer(optimizer)(
@@ -164,8 +150,10 @@ class PPO:
     def compute_returns(self, obs: TensorDict) -> None:
         """Compute return and advantage targets from stored transitions."""
         st = self.storage
-        # Compute value for the last step
+        # Compute the bootstrap value without advancing recurrent critic state.
+        critic_hidden_state = self.critic.get_hidden_state()
         last_values = self.critic(obs).detach()
+        self.critic.reset(hidden_state=critic_hidden_state)
         # Compute returns and advantages
         advantage = 0
         for step in reversed(range(st.num_transitions_per_env)):
@@ -230,22 +218,8 @@ class PPO:
                 )  # type: ignore
 
         # Perform symmetric augmentation
-        if self.symmetry and self.symmetry["use_data_augmentation"]:
-            # Augmentation using symmetry
-            data_augmentation_func = self.symmetry["data_augmentation_func"]
-            # Returned shape: [batch_size * num_aug, ...]
-            minibatch.observations, minibatch.actions = data_augmentation_func(
-                env=self.symmetry["_env"],
-                obs=minibatch.observations,
-                actions=minibatch.actions,
-            )
-            # Compute number of augmentations per sample
-            num_aug = int(minibatch.observations.batch_size[0] / original_batch_size)
-            # Repeat the rest of the batch
-            minibatch.old_actions_log_prob = minibatch.old_actions_log_prob.repeat(num_aug, 1)
-            minibatch.values = minibatch.values.repeat(num_aug, 1)
-            minibatch.advantages = minibatch.advantages.repeat(num_aug, 1)
-            minibatch.returns = minibatch.returns.repeat(num_aug, 1)
+        if self.symmetry:
+            self.symmetry.augment_batch(minibatch, original_batch_size)
 
         # Recompute actions log prob and entropy for current batch of transitions
         # Note: We need to do this because we updated the policy with the new parameters
@@ -316,33 +290,11 @@ class PPO:
 
         # Symmetry loss
         if self.symmetry:
-            # Obtain the symmetric actions
-            # Note: If we did augmentation before then we don't need to augment again
-            if not self.symmetry["use_data_augmentation"]:
-                data_augmentation_func = self.symmetry["data_augmentation_func"]
-                minibatch.observations, _ = data_augmentation_func(
-                    obs=minibatch.observations, actions=None, env=self.symmetry["_env"]
-                )
-
-            # Actions predicted by the actor for symmetrically-augmented observations
-            mean_actions = self.actor(minibatch.observations.detach().clone())
-
-            # Compute the symmetrically augmented actions
-            # Note: We are assuming the first augmentation is the original one. We do not use the batch.actions from
-            # earlier since that action was sampled from the distribution. However, the symmetry loss is computed
-            # using the mean of the distribution.
-            action_mean_orig = mean_actions[:original_batch_size]
-            _, actions_mean_symm = data_augmentation_func(obs=None, actions=action_mean_orig, env=self.symmetry["_env"])
-
-            # Compute the loss
-            mse_loss = torch.nn.MSELoss()
-            symmetry_loss = mse_loss(
-                mean_actions[original_batch_size:], actions_mean_symm.detach()[original_batch_size:]
-            )
-            if self.symmetry["use_mirror_loss"]:
+            symmetry_loss = self.symmetry.compute_loss(self.actor, minibatch, original_batch_size)
+            if self.symmetry.use_mirror_loss:
                 opt_losses["mirror_loss"] = symmetry_loss
             else:
-                non_opt_losses["mirror_loss_detach"] = symmetry_loss.detach()
+                non_opt_losses["mirror_loss_detach"] = symmetry_loss
 
         return opt_losses, non_opt_losses
 
@@ -373,8 +325,8 @@ class PPO:
     def save(self) -> dict:
         """Return a dict of all models for saving."""
         saved_dict = {
-            "actor_state_dict": self.actor.state_dict(),
-            "critic_state_dict": self.critic.state_dict(),
+            "actor_state_dict": self._raw_actor.state_dict(),
+            "critic_state_dict": self._raw_critic.state_dict(),
             "optimizer_state_dict": self.optimizer.state_dict(),
         }
         return saved_dict
@@ -392,16 +344,21 @@ class PPO:
 
         # Load the specified models
         if load_cfg.get("actor"):
-            self.actor.load_state_dict(loaded_dict["actor_state_dict"], strict=strict)
+            self._raw_actor.load_state_dict(loaded_dict["actor_state_dict"], strict=strict)
         if load_cfg.get("critic"):
-            self.critic.load_state_dict(loaded_dict["critic_state_dict"], strict=strict)
+            self._raw_critic.load_state_dict(loaded_dict["critic_state_dict"], strict=strict)
         if load_cfg.get("optimizer"):
             self.optimizer.load_state_dict(loaded_dict["optimizer_state_dict"])
         return load_cfg.get("iteration", False)
 
     def get_policy(self) -> MLPModel:
         """Get the policy model."""
-        return self.actor
+        return self._raw_actor
+
+    def compile(self, mode: str | None = None) -> None:
+        """Compile actor and critic for training while keeping raw modules for checkpoints/export."""
+        self.actor = compile_model(self._raw_actor, mode)  # type: ignore
+        self.critic = compile_model(self._raw_critic, mode)  # type: ignore
 
     @staticmethod
     def construct_algorithm(obs: TensorDict, env: VecEnv, cfg: dict, device: str) -> PPO:
@@ -458,18 +415,19 @@ class PPO:
 
         # Initialize the algorithm
         alg: PPO = alg_class(actor, critic, storage, device=device, **cfg["algorithm"], multi_gpu_cfg=cfg["multi_gpu"])
+        alg.compile(cfg.get("torch_compile_mode"))
 
         return alg
 
     def broadcast_parameters(self) -> None:
         """Broadcast model parameters to all GPUs."""
         # Obtain the model parameters on current GPU
-        model_params = [self.actor.state_dict(), self.critic.state_dict()]
+        model_params = [self._raw_actor.state_dict(), self._raw_critic.state_dict()]
         # Broadcast the model parameters
         torch.distributed.broadcast_object_list(model_params, src=0)
         # Load the model parameters on all GPUs from source GPU
-        self.actor.load_state_dict(model_params[0])
-        self.critic.load_state_dict(model_params[1])
+        self._raw_actor.load_state_dict(model_params[0])
+        self._raw_critic.load_state_dict(model_params[1])
 
     def reduce_parameters(self) -> None:
         """Collect gradients from all GPUs and average them.

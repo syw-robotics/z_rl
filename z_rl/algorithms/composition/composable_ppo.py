@@ -107,4 +107,5 @@ class ComposablePPO(PPO):
             **cfg["algorithm"],
             multi_gpu_cfg=cfg["multi_gpu"],
         )
+        alg.compile(cfg.get("torch_compile_mode"))
         return alg

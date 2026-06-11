@@ -6,7 +6,7 @@
 """Building blocks for neural models."""
 
 from .cnn import CNN
-from .distribution import Distribution, GaussianDistribution, HeteroscedasticGaussianDistribution
+from .distribution import BetaDistribution, Distribution, GaussianDistribution, HeteroscedasticGaussianDistribution
 from .mlp import MLP
 from .moe import MoE
 from .normalization import EmpiricalDiscountedVariationNormalization, EmpiricalNormalization
@@ -19,6 +19,7 @@ __all__ = [
     "MoE",
     "VAE",
     "RNN",
+    "BetaDistribution",
     "Distribution",
     "EmpiricalDiscountedVariationNormalization",
     "EmpiricalNormalization",

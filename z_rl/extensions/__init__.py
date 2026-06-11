@@ -5,8 +5,9 @@
 
 """Extensions for the learning algorithms."""
 
-from .symmetry import resolve_symmetry_config
+from .symmetry import Symmetry, resolve_symmetry_config
 
 __all__ = [
+    "Symmetry",
     "resolve_symmetry_config",
 ]

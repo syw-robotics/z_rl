@@ -6,9 +6,10 @@
 
 from __future__ import annotations
 
+import math
 import torch
 import torch.nn as nn
-from torch.distributions import Normal
+from torch.distributions import Beta, Normal
 
 
 class Distribution(nn.Module):
@@ -140,25 +141,34 @@ class GaussianDistribution(Distribution):
         self,
         output_dim: int,
         init_std: float = 1.0,
+        std_range: tuple[float, float] = (1e-6, 1e6),
         std_type: str = "scalar",
+        learn_std: bool = True,
     ) -> None:
         """Initialize the Gaussian distribution module.
 
         Args:
             output_dim: Dimension of the action/output space.
             init_std: Initial standard deviation.
+            std_range: Minimum and maximum allowed standard deviation.
             std_type: Parameterization of the standard deviation: "scalar" or "log".
+            learn_std: Whether the standard deviation should be optimized.
         """
         super().__init__(output_dim)
         self.std_type = std_type
 
         # Learnable std parameters
         if std_type == "scalar":
-            self.std_param = nn.Parameter(init_std * torch.ones(output_dim))
+            self.std_param = nn.Parameter(init_std * torch.ones(output_dim), requires_grad=learn_std)
         elif std_type == "log":
-            self.log_std_param = nn.Parameter(torch.log(init_std * torch.ones(output_dim)))
+            self.log_std_param = nn.Parameter(torch.log(init_std * torch.ones(output_dim)), requires_grad=learn_std)
         else:
             raise ValueError(f"Unknown standard deviation type: {std_type}. Should be 'scalar' or 'log'.")
+
+        # Clamp std to keep log-probabilities and entropy numerically well behaved.
+        self.std_range = list(std_range)
+        self.std_range[0] = max(self.std_range[0], 1e-6)
+        self.log_std_range = [math.log(self.std_range[0]), math.log(self.std_range[1])]
 
         # Internal torch distribution (populated by update())
         self._distribution: Normal | None = None
@@ -170,9 +180,10 @@ class GaussianDistribution(Distribution):
         """Update the Gaussian distribution from Head output."""
         mean = head_output
         if self.std_type == "scalar":
-            std = self.std_param.expand_as(mean)
+            std = self.std_param.clamp(self.std_range[0], self.std_range[1])
         elif self.std_type == "log":
-            std = torch.exp(self.log_std_param).expand_as(mean)
+            log_std = self.log_std_param.clamp(self.log_std_range[0], self.log_std_range[1])
+            std = torch.exp(log_std)
         self._distribution = Normal(mean, std)
 
     def sample(self) -> torch.Tensor:
@@ -237,6 +248,7 @@ class HeteroscedasticGaussianDistribution(GaussianDistribution):
         self,
         output_dim: int,
         init_std: float = 1.0,
+        std_range: tuple[float, float] = (1e-6, 1e6),
         std_type: str = "scalar",
     ) -> None:
         """Initialize the heteroscedastic Gaussian distribution module.
@@ -244,6 +256,7 @@ class HeteroscedasticGaussianDistribution(GaussianDistribution):
         Args:
             output_dim: Dimension of the action/output space.
             init_std: Initial standard deviation (used to initialize Head std).
+            std_range: Minimum and maximum allowed standard deviation.
             std_type: Parameterization of the standard deviation: "scalar" or "log".
         """
         # Skip GaussianDistribution.__init__ to avoid creating unnecessary learnable std parameters.
@@ -253,6 +266,11 @@ class HeteroscedasticGaussianDistribution(GaussianDistribution):
 
         if std_type not in ("scalar", "log"):
             raise ValueError(f"Unknown standard deviation type: {std_type}. Should be 'scalar' or 'log'.")
+
+        # Clamp state-dependent std because it is produced directly by the network.
+        self.std_range = list(std_range)
+        self.std_range[0] = max(self.std_range[0], 1e-6)
+        self.log_std_range = [math.log(self.std_range[0]), math.log(self.std_range[1])]
 
         # Internal torch distribution (populated by update())
         self._distribution: Normal | None = None
@@ -264,8 +282,10 @@ class HeteroscedasticGaussianDistribution(GaussianDistribution):
         """Update the Gaussian distribution from Head output."""
         if self.std_type == "scalar":
             mean, std = torch.unbind(head_output, dim=-2)
+            std = torch.clamp(std, self.std_range[0], self.std_range[1])
         elif self.std_type == "log":
             mean, log_std = torch.unbind(head_output, dim=-2)
+            log_std = torch.clamp(log_std, self.log_std_range[0], self.log_std_range[1])
             std = torch.exp(log_std)
         self._distribution = Normal(mean, std)
 
@@ -297,6 +317,95 @@ class HeteroscedasticGaussianDistribution(GaussianDistribution):
             torch.nn.init.constant_(head[-2].bias[self.output_dim :], init_std_log)  # type: ignore
 
 
+class BetaDistribution(Distribution):
+    """Beta distribution for bounded action spaces.
+
+    The Head outputs raw alpha and beta parameters with shape ``[..., 2, output_dim]``. Samples from ``[0, 1]`` are
+    linearly mapped to ``action_range``.
+    """
+
+    def __init__(self, output_dim: int, action_range: tuple[float, float] = (-1.0, 1.0)) -> None:
+        """Initialize the Beta distribution module."""
+        super().__init__(output_dim)
+        if action_range[1] <= action_range[0]:
+            raise ValueError(f"`action_range` must be increasing, got {action_range}.")
+
+        self.action_range = action_range
+        self._range_scale = action_range[1] - action_range[0]
+        self._range_offset = action_range[0]
+        self._log_range_scale = math.log(self._range_scale)
+
+        self._distribution: Beta | None = None
+        self._alpha: torch.Tensor | None = None
+        self._beta: torch.Tensor | None = None
+
+        Beta.set_default_validate_args(False)
+
+    def update(self, head_output: torch.Tensor) -> None:
+        """Update the Beta distribution from Head output."""
+        alpha_raw, beta_raw = torch.unbind(head_output, dim=-2)
+        self._alpha = torch.nn.functional.softplus(alpha_raw) + 1.0
+        self._beta = torch.nn.functional.softplus(beta_raw) + 1.0
+        self._distribution = Beta(self._alpha, self._beta)
+
+    def sample(self) -> torch.Tensor:
+        """Sample from the distribution and map to ``action_range``."""
+        return self._distribution.sample() * self._range_scale + self._range_offset  # type: ignore
+
+    def deterministic_output(self, head_output: torch.Tensor) -> torch.Tensor:
+        """Return the mean action mapped to ``action_range``."""
+        alpha_raw, beta_raw = torch.unbind(head_output, dim=-2)
+        alpha = torch.nn.functional.softplus(alpha_raw) + 1.0
+        beta = torch.nn.functional.softplus(beta_raw) + 1.0
+        return (alpha / (alpha + beta)) * self._range_scale + self._range_offset
+
+    def as_deterministic_output_module(self) -> nn.Module:
+        """Return export-friendly module that computes the mapped mean action."""
+        return _BetaDeterministicOutput(self._range_scale, self._range_offset)
+
+    @property
+    def input_dim(self) -> list[int]:
+        """Return the Head output shape required by the distribution."""
+        return [2, self.output_dim]
+
+    @property
+    def mean(self) -> torch.Tensor:
+        """Return the mapped distribution mean."""
+        return (self._alpha / (self._alpha + self._beta)) * self._range_scale + self._range_offset  # type: ignore
+
+    @property
+    def std(self) -> torch.Tensor:
+        """Return the mapped standard deviation."""
+        return self._distribution.stddev * self._range_scale  # type: ignore
+
+    @property
+    def entropy(self) -> torch.Tensor:
+        """Return entropy summed over action dimensions."""
+        return self._distribution.entropy().sum(dim=-1)  # type: ignore
+
+    @property
+    def params(self) -> tuple[torch.Tensor, ...]:
+        """Return the current alpha and beta tensors."""
+        return (self._alpha, self._beta)  # type: ignore
+
+    def log_prob(self, outputs: torch.Tensor) -> torch.Tensor:
+        """Compute log-probability of mapped actions, including linear-rescale correction."""
+        unscaled = (outputs - self._range_offset) / self._range_scale
+        unscaled = unscaled.clamp(1e-6, 1.0 - 1e-6)
+        return (self._distribution.log_prob(unscaled) - self._log_range_scale).sum(dim=-1)  # type: ignore
+
+    def kl_divergence(self, old_params: tuple[torch.Tensor, ...], new_params: tuple[torch.Tensor, ...]) -> torch.Tensor:
+        """Compute KL(old || new) between two Beta distributions."""
+        old_alpha, old_beta = old_params
+        new_alpha, new_beta = new_params
+        return torch.distributions.kl_divergence(Beta(old_alpha, old_beta), Beta(new_alpha, new_beta)).sum(dim=-1)
+
+    def init_head_weights(self, head: nn.Module) -> None:
+        """Initialize the beta head to produce a near-uniform initial distribution."""
+        torch.nn.init.zeros_(head[-2].weight[self.output_dim :])  # type: ignore
+        torch.nn.init.zeros_(head[-2].bias[self.output_dim :])  # type: ignore
+
+
 class _IdentityDeterministicOutput(nn.Module):
     """Exportable module that returns the Head output as is."""
 
@@ -309,3 +418,18 @@ class _MeanSliceDeterministicOutput(nn.Module):
 
     def forward(self, head_output: torch.Tensor) -> torch.Tensor:
         return head_output[..., 0, :]
+
+
+class _BetaDeterministicOutput(nn.Module):
+    """Exportable module that computes the mapped Beta mean from Head output."""
+
+    def __init__(self, range_scale: float, range_offset: float) -> None:
+        super().__init__()
+        self.range_scale = range_scale
+        self.range_offset = range_offset
+
+    def forward(self, head_output: torch.Tensor) -> torch.Tensor:
+        alpha_raw, beta_raw = torch.unbind(head_output, dim=-2)
+        alpha = torch.nn.functional.softplus(alpha_raw) + 1.0
+        beta = torch.nn.functional.softplus(beta_raw) + 1.0
+        return (alpha / (alpha + beta)) * self.range_scale + self.range_offset

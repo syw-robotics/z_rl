@@ -42,7 +42,7 @@ Issues = "https://github.com/syw-robotics/z_rl/issues"
 
 [project.scripts]
 z-rl-plugin-init = "z_rl.cli.plugin_template:main"
-z-rl-checkpoint-key-editor = "z_rl.cli.checkpoint_key_editor:main"
+z-rl-checkpoint-editor = "z_rl.cli.checkpoint_editor:main"
 
 [tool.setuptools.packages.find]
 where = ["."]

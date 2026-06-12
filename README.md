@@ -33,6 +33,30 @@ For detailed module guides, see:
 - [Algorithms README](z_rl/algorithms/README.md)
 - [Models README](z_rl/models/README.md)
 
+## 🛠️ CLI Tools
+
+After installing Z-RL, the following command line tools are available:
+
+### `z-rl-plugin-init`
+
+Generate a minimal external plugin package scaffold:
+
+```bash
+z-rl-plugin-init
+
+# z-rl-plugin-init --path ./my_zrl_plugin --name z_rl_plugin_example
+```
+
+### `z-rl-checkpoint-editor`
+
+Launch a Gradio UI for inspecting all nested PyTorch checkpoint contents with path filtering and renaming top-level
+checkpoint keys. This is useful when adapting older checkpoints, for example renaming `student_state_dict` to
+`actor_state_dict`.
+
+```bash
+z-rl-checkpoint-editor
+```
+
 ## 🔌 Plugin System
 
 Z-RL supports **external plugin packages** so your custom algorithms/models/modules stay isolated from upstream core code.

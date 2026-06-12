@@ -113,3 +113,37 @@ class TestComposablePPO:
         actions = algo.act(obs)
 
         assert torch.equal(actions, torch.full((NUM_ENVS, NUM_ACTIONS), 9.0))
+
+    def test_subclass_can_override_update_actor_forward(self) -> None:
+        class _CustomForwardPPO(ComposablePPO):
+            def __init__(self, *args, **kwargs) -> None:
+                super().__init__(*args, **kwargs)
+                self.forward_actor_for_update_called = False
+
+            def forward_actor_for_update(self, minibatch: RolloutStorage.Batch) -> None:
+                self.forward_actor_for_update_called = True
+                super().forward_actor_for_update(minibatch)
+
+        obs = make_obs(NUM_ENVS, OBS_DIM)
+        obs_groups = {"actor": ["policy"], "critic": ["policy"]}
+        actor = _make_actor(obs, obs_groups)
+        critic = _make_critic(obs, obs_groups)
+        storage = RolloutStorage("rl", NUM_ENVS, NUM_STEPS, obs, [NUM_ACTIONS])
+        algo = _CustomForwardPPO(actor, critic, storage, loss_spec=_DummyLossSpec())
+
+        transition = RolloutStorage.Transition()
+        transition.observations = obs
+        transition.hidden_states = (None, None)
+        transition.actions = actor(obs, stochastic_output=True).detach()
+        transition.values = critic(obs).detach()
+        transition.actions_log_prob = actor.get_output_log_prob(transition.actions).detach()
+        transition.distribution_params = tuple(p.detach() for p in actor.output_distribution_params)
+        transition.rewards = torch.ones(NUM_ENVS)
+        transition.dones = torch.zeros(NUM_ENVS)
+        storage.add_transition(transition)
+        algo.compute_returns(obs)
+
+        minibatch = next(storage.mini_batch_generator(num_mini_batches=1, num_epochs=1))
+        algo.compute_loss(minibatch)
+
+        assert algo.forward_actor_for_update_called

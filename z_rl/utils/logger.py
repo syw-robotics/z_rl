@@ -158,8 +158,9 @@ class Logger:
             # Log episode extras
             extras_string = ""
             if self.ep_extras:
-                # Iterate over all keys in the episode info dictionary
-                for key in {k for ep_info in self.ep_extras for k in ep_info}:
+                # Iterate over all keys in first-seen order while removing duplicates.
+                ep_extra_keys = dict.fromkeys(k for ep_info in self.ep_extras for k in ep_info)
+                for key in ep_extra_keys:
                     infotensor = torch.tensor([], device=self.device)
                     # Iterate over all steps
                     for ep_info in self.ep_extras:

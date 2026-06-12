@@ -107,6 +107,7 @@ class PPO:
         self.schedule = schedule
         self.learning_rate = learning_rate
         self.normalize_advantage_per_mini_batch = normalize_advantage_per_mini_batch
+        self.actor_forward_context = None
 
     def act(self, obs: TensorDict) -> torch.Tensor:
         """Sample actions and store transition data."""
@@ -223,12 +224,7 @@ class PPO:
 
         # Recompute actions log prob and entropy for current batch of transitions
         # Note: We need to do this because we updated the policy with the new parameters
-        self.actor(
-            minibatch.observations,
-            masks=minibatch.masks,
-            hidden_state=minibatch.hidden_states[0],
-            stochastic_output=True,
-        )
+        self.forward_actor_for_update(minibatch)
         actions_log_prob = self.actor.get_output_log_prob(minibatch.actions)  # type: ignore
         values = self.critic(minibatch.observations, masks=minibatch.masks, hidden_state=minibatch.hidden_states[1])
         # Note: We only keep the distribution parameters and entropy of the first augmentation (the original one)
@@ -298,6 +294,20 @@ class PPO:
 
         return opt_losses, non_opt_losses
 
+    def forward_actor_for_update(self, minibatch: RolloutStorage.Batch) -> None:
+        """Run the actor forward pass used by update-time loss computation.
+
+        Subclasses may override this to expose differentiable forward context for additional loss specs while keeping
+        the base PPO loss computation unchanged.
+        """
+        self.actor_forward_context = None
+        self.actor(
+            minibatch.observations,
+            masks=minibatch.masks,
+            hidden_state=minibatch.hidden_states[0],
+            stochastic_output=True,
+        )
+
     def gradient_step(self, loss: torch.Tensor):
         # Compute the gradients for PPO
         self.optimizer.zero_grad()
@@ -360,11 +370,20 @@ class PPO:
         self.actor = compile_model(self._raw_actor, mode)  # type: ignore
         self.critic = compile_model(self._raw_critic, mode)  # type: ignore
 
-    @staticmethod
-    def construct_algorithm(obs: TensorDict, env: VecEnv, cfg: dict, device: str) -> PPO:
+    @classmethod
+    def _build_algorithm_extra_kwargs(cls, env: VecEnv, algorithm_cfg: dict) -> dict:
+        """Build subclass-specific keyword arguments for algorithm construction."""
+        del env, algorithm_cfg
+        return {}
+
+    @classmethod
+    def construct_algorithm(cls, obs: TensorDict, env: VecEnv, cfg: dict, device: str) -> PPO:
         """Construct the PPO algorithm."""
         # Resolve class callables
-        alg_class: type[PPO] = resolve_callable(cfg["algorithm"].pop("class_name"))  # type: ignore
+        alg_class: type[PPO] = cls
+        class_name = cfg["algorithm"].pop("class_name", None)
+        if cls is PPO and class_name is not None:
+            alg_class = resolve_callable(class_name)  # type: ignore
         actor_class: type[MLPModel] = resolve_callable(cfg["actor"].pop("class_name"))  # type: ignore
         critic_class: type[MLPModel] = resolve_callable(cfg["critic"].pop("class_name"))  # type: ignore
 
@@ -397,7 +416,7 @@ class PPO:
         if actor_init_weights is not None:
             actor.head.init_weights(actor_init_weights)
             print("-" * 80)
-            print(f"Actor Head uses orthogonal init: {actor_cnn_init_weights}")
+            print(f"Actor Head uses orthogonal init: {actor_init_weights}")
         if critic_init_weights is not None:
             critic.head.init_weights(critic_init_weights)
             print(f"Critic Head uses orthogonal init: {critic_init_weights}")
@@ -413,8 +432,18 @@ class PPO:
         # Initialize the storage
         storage = RolloutStorage("rl", env.num_envs, cfg["num_steps_per_env"], obs, [env.num_actions], device)
 
+        extra_kwargs = alg_class._build_algorithm_extra_kwargs(env, cfg["algorithm"])
+
         # Initialize the algorithm
-        alg: PPO = alg_class(actor, critic, storage, device=device, **cfg["algorithm"], multi_gpu_cfg=cfg["multi_gpu"])
+        alg: PPO = alg_class(
+            actor,
+            critic,
+            storage,
+            device=device,
+            **cfg["algorithm"],
+            **extra_kwargs,
+            multi_gpu_cfg=cfg["multi_gpu"],
+        )
         alg.compile(cfg.get("torch_compile_mode"))
 
         return alg

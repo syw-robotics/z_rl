@@ -17,4 +17,4 @@ def test_pyproject_exposes_checkpoint_key_editor_cli() -> None:
     pyproject_path = Path(__file__).resolve().parents[2] / "pyproject.toml"
     pyproject_content = pyproject_path.read_text(encoding="utf-8")
 
-    assert 'z-rl-checkpoint-key-editor = "z_rl.cli.checkpoint_key_editor:main"' in pyproject_content
+    assert 'z-rl-checkpoint-editor = "z_rl.cli.checkpoint_editor:main"' in pyproject_content

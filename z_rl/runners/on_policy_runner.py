@@ -157,7 +157,7 @@ class OnPolicyRunner:
                 "[OnPolicyRunner][WARNING] Checkpoint contains 'student_state_dict'. "
                 "OnPolicyRunner expects 'actor_state_dict' when resuming RL training. "
                 "If you want to finetune a distilled student policy with RL, make sure to use "
-                "`z-rl-checkpoint-key-editor` cli command to rename 'student_state_dict' to 'actor_state_dict' before loading."
+                "`z-rl-checkpoint-editor` cli command to rename 'student_state_dict' to 'actor_state_dict' before loading."
             )
         load_iteration = self.alg.load(loaded_dict, load_cfg, strict)
         if load_iteration:

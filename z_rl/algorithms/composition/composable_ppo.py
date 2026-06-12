@@ -10,10 +10,7 @@ import torch
 from tensordict import TensorDict
 
 from z_rl.env import VecEnv
-from z_rl.extensions import resolve_symmetry_config
-from z_rl.models import MLPModel
 from z_rl.storage import RolloutStorage
-from z_rl.utils import inject_obs_time_slice_map, resolve_callable, resolve_obs_groups
 
 from ..ppo import PPO
 from .specs import PPOLossSpec
@@ -46,66 +43,16 @@ class ComposablePPO(PPO):
         """
         return super().act(obs)
 
+    def forward_actor_for_update(self, minibatch: RolloutStorage.Batch) -> None:
+        """Subclasses can override update-time actor forwards."""
+        super().forward_actor_for_update(minibatch)
+
     @classmethod
     def build_loss_spec(cls, env: VecEnv, algorithm_cfg: dict) -> PPOLossSpec:
         """Build the loss spec for this PPO variant from the environment and algorithm config."""
         raise NotImplementedError(f"`{cls.__name__}` must override `build_loss_spec()`.")
 
     @classmethod
-    def construct_algorithm(cls, obs: TensorDict, env: VecEnv, cfg: dict, device: str) -> "ComposablePPO":
-        """Construct a composable PPO variant using the shared PPO assembly flow."""
-        cfg["algorithm"].pop("class_name", None)
-        actor_class: type[MLPModel] = resolve_callable(cfg["actor"].pop("class_name"))  # type: ignore
-        critic_class: type[MLPModel] = resolve_callable(cfg["critic"].pop("class_name"))  # type: ignore
-
-        default_sets = ["actor", "critic"]
-        cfg["obs_groups"] = resolve_obs_groups(obs, cfg["obs_groups"], default_sets)
-        cfg["algorithm"] = resolve_symmetry_config(cfg["algorithm"], env)
-
-        inject_obs_time_slice_map(cfg["actor"], actor_class, env)
-        inject_obs_time_slice_map(cfg["critic"], critic_class, env)
-
-        # Pop init_weights configs before creating models (they are not model __init__ args)
-        actor_init_weights = cfg["actor"].pop("init_weights", None)
-        actor_cnn_init_weights = cfg["actor"].pop("cnn_init_weights", None)
-        critic_init_weights = cfg["critic"].pop("init_weights", None)
-        critic_cnn_init_weights = cfg["critic"].pop("cnn_init_weights", None)
-
-        actor: MLPModel = actor_class(obs, cfg["obs_groups"], "actor", env.num_actions, **cfg["actor"]).to(device)
-        print(f"Actor Model: {actor}")
-        if cfg["algorithm"].pop("share_cnn_encoders", None):
-            cfg["critic"]["cnns"] = actor.cnns  # type: ignore
-        critic: MLPModel = critic_class(obs, cfg["obs_groups"], "critic", 1, **cfg["critic"]).to(device)
-        print(f"Critic Model: {critic}")
-
-        # Initialize weights if configured
-        if actor_init_weights is not None:
-            actor.head.init_weights(actor_init_weights)
-            print("-" * 80)
-            print(f"Actor Head uses orthogonal init: {actor_cnn_init_weights}")
-        if critic_init_weights is not None:
-            critic.head.init_weights(critic_init_weights)
-            print(f"Critic Head uses orthogonal init: {critic_init_weights}")
-        # Initialize CNN weights if configured
-        if actor_cnn_init_weights:
-            actor.init_cnn_weights()
-            print(f"Actor CNNs use kaiming init")
-        if critic_cnn_init_weights:
-            critic.init_cnn_weights()
-            print(f"Critic CNNs use kaiming init")
-        print("-" * 80)
-
-        storage = RolloutStorage("rl", env.num_envs, cfg["num_steps_per_env"], obs, [env.num_actions], device)
-        loss_spec = cls.build_loss_spec(env, cfg["algorithm"])
-
-        alg: ComposablePPO = cls(
-            actor,
-            critic,
-            storage,
-            loss_spec=loss_spec,
-            device=device,
-            **cfg["algorithm"],
-            multi_gpu_cfg=cfg["multi_gpu"],
-        )
-        alg.compile(cfg.get("torch_compile_mode"))
-        return alg
+    def _build_algorithm_extra_kwargs(cls, env: VecEnv, algorithm_cfg: dict) -> dict:
+        """Build composable PPO-specific keyword arguments for shared PPO construction."""
+        return {"loss_spec": cls.build_loss_spec(env, algorithm_cfg)}

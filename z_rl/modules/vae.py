@@ -77,9 +77,9 @@ class VAE(nn.Module):
         return output
 
     @staticmethod
-    def compute_loss(
+    def compute_vae_loss(
         x: torch.Tensor,
-        recon_x: torch.Tensor,
+        recon_target: torch.Tensor,
         mu: torch.Tensor,
         log_var: torch.Tensor,
         beta: float = 1.0,
@@ -94,7 +94,7 @@ class VAE(nn.Module):
         if beta < 0.0:
             raise ValueError(f"`beta` must be non-negative, got {beta}.")
 
-        recon_per_sample = torch.mean((recon_x - x).pow(2), dim=-1)
+        recon_per_sample = torch.mean((recon_target - x).pow(2), dim=-1)
         kl_per_sample = -0.5 * torch.sum(1.0 + log_var - mu.pow(2) - log_var.exp(), dim=-1)
 
         if reduction == "mean":

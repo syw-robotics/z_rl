@@ -11,7 +11,7 @@ import torch
 import torch.nn as nn
 from tensordict import TensorDict
 
-from z_rl.modules import VAE
+from z_rl.modules import MLP, VAE
 
 from z_rl.models.composition import ComposableModel, HeadSpec, LatentSpec
 
@@ -21,6 +21,7 @@ class VAEEncoderLatentSpec(LatentSpec):
     """Latent spec that replaces normalized policy observations with sampled VAE latent."""
 
     latent_dim: int = 64
+    decoder_input_dim: int | None = None
     encoder_hidden_dims: tuple[int, ...] | list[int] = (256, 256)
     decoder_hidden_dims: tuple[int, ...] | list[int] = (256, 256)
     activation: str = "elu"
@@ -34,6 +35,14 @@ class VAEEncoderLatentSpec(LatentSpec):
             )
         if self.latent_dim <= 0:
             raise ValueError(f"`latent_dim` must be positive, got {self.latent_dim}.")
+        if self.decoder_input_dim is not None:
+            if self.decoder_input_dim <= 0:
+                raise ValueError(f"`decoder_input_dim` must be positive, got {self.decoder_input_dim}.")
+            if self.decoder_input_dim > self.latent_dim:
+                raise ValueError(
+                    f"`decoder_input_dim` can not exceed `latent_dim`, "
+                    f"got {self.decoder_input_dim} > {self.latent_dim}."
+                )
         if isinstance(self.encoder_hidden_dims, (tuple, list)) and len(self.encoder_hidden_dims) == 0:
             raise ValueError("`encoder_hidden_dims` can not be empty.")
         if isinstance(self.decoder_hidden_dims, (tuple, list)) and len(self.decoder_hidden_dims) == 0:
@@ -44,6 +53,7 @@ class VAEEncoderLatentSpec(LatentSpec):
         vae = VAE(
             input_dim=model.obs_dim,
             latent_dim=self.latent_dim,
+            decoder_input_dim=self.decoder_input_dim,
             decoder_output_dim=getattr(model, "_vae_decoder_output_dim"),
             encoder_hidden_dims=self.encoder_hidden_dims,
             decoder_hidden_dims=self.decoder_hidden_dims,
@@ -74,18 +84,7 @@ class VAEDecoderHeadSpec(HeadSpec):
 
     def build_head(self, model: nn.Module, input_dim: int, output_dim: int, activation: str) -> nn.Module:
         """Return the decoder from the same VAE used by the latent adapter."""
-        if not isinstance(output_dim, int):
-            raise TypeError(
-                "`VAEModel` only supports integer decoder output dimensions. "
-                f"Got output_dim={output_dim}."
-            )
-        decoder = model.latent_adapter.vae.decoder
-        if getattr(model, "_vae_decoder_output_dim", None) != output_dim:
-            raise ValueError(
-                f"VAE decoder output_dim mismatch: expected {output_dim}, "
-                f"got {getattr(model, '_vae_decoder_output_dim', None)}."
-            )
-        return decoder
+        return model.latent_adapter.vae.decoder
 
 
 class _VAELatentAdapter(nn.Module):
@@ -151,6 +150,7 @@ class VAEModel(ComposableModel):
         obs_normalization: bool = False,
         distribution_cfg: dict | None = None,
         latent_dim: int = 64,
+        decoder_input_dim: int | None = None,
         encoder_hidden_dims: tuple[int, ...] | list[int] = (256, 256),
         decoder_hidden_dims: tuple[int, ...] | list[int] = (256, 256),
         vae_activation: str = "elu",
@@ -168,6 +168,7 @@ class VAEModel(ComposableModel):
             distribution_cfg=distribution_cfg,
             latent_spec=VAEEncoderLatentSpec(
                 latent_dim=latent_dim,
+                decoder_input_dim=decoder_input_dim,
                 encoder_hidden_dims=encoder_hidden_dims,
                 decoder_hidden_dims=decoder_hidden_dims,
                 activation=vae_activation,

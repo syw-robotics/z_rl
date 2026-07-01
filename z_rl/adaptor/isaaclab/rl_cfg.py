@@ -171,6 +171,9 @@ class ZRlVAEModelCfg(ZRlMLPModelCfg):
     encoder_hidden_dims: list[int] = MISSING
     """The hidden dimensions of the VAE encoder MLP."""
 
+    decoder_input_dim: int | None = None
+    """The latent slice dimension consumed by the VAE decoder. If None, defaults to latent_dim."""
+
     decoder_hidden_dims: list[int] = MISSING
     """The hidden dimensions of the VAE decoder MLP."""
 

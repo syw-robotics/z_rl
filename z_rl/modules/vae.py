@@ -19,6 +19,7 @@ class VAE(nn.Module):
         self,
         input_dim: int,
         latent_dim: int,
+        decoder_input_dim: int | None = None,
         decoder_output_dim: int | None = None,
         encoder_hidden_dims: tuple[int, ...] | list[int] = (256, 256),
         decoder_hidden_dims: tuple[int, ...] | list[int] = (256, 256),
@@ -29,6 +30,7 @@ class VAE(nn.Module):
         Args:
             input_dim: Input feature dimension.
             latent_dim: Latent feature dimension.
+            decoder_input_dim: Decoder input dimension. If ``None``, it defaults to ``latent_dim``.
             decoder_output_dim: Decoder output dimension. If ``None``, it defaults to ``input_dim``.
             encoder_hidden_dims: Hidden dimensions of encoder backbone.
             decoder_hidden_dims: Hidden dimensions of decoder backbone.
@@ -37,17 +39,19 @@ class VAE(nn.Module):
         super().__init__()
         if latent_dim <= 0:
             raise ValueError(f"`latent_dim` must be positive, got {latent_dim}.")
+        decoder_input_dim = latent_dim if decoder_input_dim is None else decoder_input_dim
         if decoder_output_dim is not None and decoder_output_dim <= 0:
             raise ValueError(f"`decoder_output_dim` must be positive, got {decoder_output_dim}.")
 
         self.input_dim = input_dim
         self.latent_dim = latent_dim
+        self.decoder_input_dim = decoder_input_dim
         self.decoder_output_dim = input_dim if decoder_output_dim is None else decoder_output_dim
 
         # Encoder backbone outputs 2 * latent_dim for [mu, log_var].
         self.encoder = MLP(input_dim, 2 * latent_dim, encoder_hidden_dims, activation)
-        # Decoder maps sampled latent z back to reconstruction space.
-        self.decoder = MLP(latent_dim, self.decoder_output_dim, decoder_hidden_dims, activation)
+        # Decoder maps the configured leading slice of sampled latent z back to reconstruction space.
+        self.decoder = MLP(self.decoder_input_dim, self.decoder_output_dim, decoder_hidden_dims, activation)
 
     def encode(self, x: torch.Tensor) -> tuple[torch.Tensor, torch.Tensor]:
         """Encode input into Gaussian posterior parameters (mu, log_var)."""

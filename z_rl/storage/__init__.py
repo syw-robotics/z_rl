@@ -5,6 +5,7 @@
 
 """Storage for the learning algorithms."""
 
+from .amp_storage import AmpStorage
 from .rollout_storage import RolloutStorage
 
-__all__ = ["RolloutStorage"]
+__all__ = ["AmpStorage", "RolloutStorage"]

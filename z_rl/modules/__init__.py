@@ -12,6 +12,8 @@ from .moe import MoE
 from .normalization import EmpiricalDiscountedVariationNormalization, EmpiricalNormalization
 from .rnn import RNN, HiddenState
 from .vae import VAE
+from .discriminator import AMPDiscriminator
+from .amp import AMPModule
 
 __all__ = [
     "CNN",
@@ -19,6 +21,8 @@ __all__ = [
     "MoE",
     "VAE",
     "RNN",
+    "AMPModule",
+    "AMPDiscriminator",
     "BetaDistribution",
     "Distribution",
     "EmpiricalDiscountedVariationNormalization",

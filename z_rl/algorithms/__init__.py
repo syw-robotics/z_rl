@@ -9,11 +9,12 @@ from .variants import EncoderEstimationPPO
 from .ppo import PPO
 from .composition import ComposablePPO
 from .distillation import Distillation
-
+from .amp_ppo import AMPPPO
 
 __all__ = [
     "PPO",
     "Distillation",
     "ComposablePPO",
     "EncoderEstimationPPO",
+    "AMPPPO",
 ]

@@ -310,6 +310,49 @@ class ZRlPpoAlgorithmCfg:
 
 
 @configclass
+class ZRlAmpPpoAlgorithmCfg(ZRlPpoAlgorithmCfg):
+    """Configuration for the AMP PPO algorithm."""
+
+    class_name: str = "AMPPPO"
+    """The algorithm class name. Defaults to AMPPPO."""
+
+    amp_policy_obs_group: str = "amp_policy"
+    """Observation group used for policy AMP states."""
+
+    amp_reference_obs_group: str = "amp_reference"
+    """Observation group used for reference AMP states."""
+
+    amp_reward_coef: float = 1.0
+    """Scale applied to the AMP style reward."""
+
+    amp_task_reward_lerp: float = 0.0
+    """Interpolation factor between AMP reward and task reward.
+
+    If 0.0, use AMP reward only.
+    If 1.0, use task reward only.
+    Values between 0.0 and 1.0 blend the two rewards.
+    """
+
+    amp_loss_coef: float = 1.0
+    """Scale applied to the discriminator loss."""
+
+    amp_grad_penalty_coef: float = 10.0
+    """Scale for the discriminator gradient penalty on reference transitions."""
+
+    amp_discriminator_hidden_dims: list[int] = [1024, 512]
+    """Hidden layer sizes for the AMP discriminator MLP."""
+
+    amp_discriminator_activation: str = "relu"
+    """Activation function used by the AMP discriminator."""
+
+    amp_discriminator_learning_rate: float = 1.0e-3
+    """Learning rate for the AMP discriminator optimizer."""
+
+    amp_discriminator_optimizer: str = "adam"
+    """Optimizer used for the AMP discriminator."""
+
+
+@configclass
 class ZRlEncoderEstimationPpoAlgorithmCfg(ZRlPpoAlgorithmCfg):
     """Configuration for the encoder-estimation PPO algorithm variant."""
 

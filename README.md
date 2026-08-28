@@ -1,6 +1,6 @@
 # Z-RL
 
-**Z-RL** is a lightweight reinforcement learning infrastructure derived from [RSL-RL](https://github.com/leggedrobotics/rsl_rl), redesigned for faster iteration in robotics projects (only supports IsaacLab's manager based rl env currently).
+**Z-RL** is a lightweight reinforcement learning infrastructure derived from [RSL-RL](https://github.com/leggedrobotics/rsl_rl), redesigned for faster iteration in robotics projects. Environment adaptors currently support IsaacLab manager-based RL environments and Active Adaptation environments.
 
 `Z` is the last letter of the alphabet, we hope Z-RL is your **last** time dedicatedly reviewing RL infra code.  
 
@@ -30,6 +30,7 @@ python -m pip install -e .
 For detailed module guides, see:
 
 - [IsaacLab adaptor README](z_rl/adaptor/isaaclab/README.md)
+- [Active Adaptation adaptor README](z_rl/adaptor/active_adaptation/README.md)
 - [Algorithms README](z_rl/algorithms/README.md)
 - [Models README](z_rl/models/README.md)
 

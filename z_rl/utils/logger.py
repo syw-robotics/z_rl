@@ -92,6 +92,7 @@ class Logger:
 
                 self.writer = SummaryWriter(log_dir=self.log_dir, flush_secs=10)
             else:
+                assert self.logger_type is not None
                 writer_class = resolve_callable(self.logger_type)
                 writer_kwargs = logger_cfg if isinstance(logger_cfg, dict) else {}
                 self.writer = writer_class(log_dir=self.log_dir, **writer_kwargs)  # type: ignore[arg-type]
@@ -115,11 +116,6 @@ class Logger:
     ) -> None:
         """Add metrics from the environment step to the buffers."""
         if self.writer is not None:
-            if "episode" in extras:
-                self.ep_extras.append(extras["episode"])
-            elif "log" in extras:
-                self.ep_extras.append(extras["log"])
-
             # Update rewards and episode length
             self.cur_reward_sum += rewards
             self.cur_episode_length += 1
@@ -130,6 +126,19 @@ class Logger:
             self.lenbuffer.extend(self.cur_episode_length[new_ids][:, 0].cpu().numpy().tolist())
             self.cur_reward_sum[new_ids] = 0
             self.cur_episode_length[new_ids] = 0
+
+            # Deferred env logs reuse new_ids instead of synchronizing once in the adaptor.
+            ep_info = extras.get("episode", extras.get("log"))
+            log_on_done = bool(extras.get("log_on_done"))
+            if ep_info is not None and (not log_on_done or new_ids.numel() > 0):
+                if log_on_done:
+                    env_ids = new_ids[:, 0]
+                    scales = extras.get("log_scale", {})
+                    ep_info = {
+                        key: value.index_select(0, env_ids.to(value.device)).detach().reshape(-1) * scales.get(key, 1.0)
+                        for key, value in ep_info.items()
+                    }
+                self.ep_extras.append(ep_info)
 
     def log(
         self,

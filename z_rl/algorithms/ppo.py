@@ -54,6 +54,7 @@ class PPO:
         normalize_advantage_per_mini_batch: bool = False,
         device: str = "cpu",
         # Symmetry parameters
+        symmetry_augmentation: bool = False,
         symmetry_cfg: dict | None = None,
         # Distributed training parameters
         multi_gpu_cfg: dict | None = None,
@@ -72,11 +73,21 @@ class PPO:
             self.gpu_world_size = 1
 
         # Symmetry extension
+        if symmetry_augmentation and symmetry_cfg is None:
+            raise ValueError("symmetry_augmentation requires an environment-backed symmetry config.")
         if symmetry_cfg is not None and (actor.is_recurrent or critic.is_recurrent):
             raise ValueError("Symmetry augmentation is not supported for recurrent policies.")
-        self.symmetry = Symmetry(**symmetry_cfg) if symmetry_cfg else None
+        self.symmetry = (
+            Symmetry(batch_is_augmented=symmetry_augmentation, **symmetry_cfg) if symmetry_cfg is not None else None
+        )
+        self._use_symmetry_augmentation = symmetry_augmentation
+        self._use_mirror_loss = False
+        self._mirror_loss_log_interval = None
         if self.symmetry is not None:
             self.mirror_loss_coef = self.symmetry.mirror_loss_coeff
+            self._use_mirror_loss = self.symmetry.use_mirror_loss
+            if self.symmetry.log_mirror_loss and not self._use_mirror_loss:
+                self._mirror_loss_log_interval = self.symmetry.mirror_loss_log_interval
 
         # PPO components
         self.actor = actor.to(self.device)
@@ -108,6 +119,7 @@ class PPO:
         self.learning_rate = learning_rate
         self.normalize_advantage_per_mini_batch = normalize_advantage_per_mini_batch
         self.actor_forward_context = None
+        self._update_iteration = 0
 
     def act(self, obs: TensorDict) -> torch.Tensor:
         """Sample actions and store transition data."""
@@ -177,6 +189,10 @@ class PPO:
     def update(self) -> dict[str, float]:
         """Run optimization epochs over stored batches and return mean losses."""
         mean_losses = defaultdict(float)
+        mirror_loss_metric = None
+        log_mirror_loss = self._mirror_loss_log_interval is not None and (
+            self._update_iteration % self._mirror_loss_log_interval == 0
+        )
 
         # Get mini batch generator
         if self.actor.is_recurrent or self.critic.is_recurrent:
@@ -186,7 +202,15 @@ class PPO:
 
         # Iterate over batches
         for minibatch in generator:
+            original_batch_size = minibatch.observations.batch_size[0]
             opt_losses, non_opt_losses = self.compute_loss(minibatch)
+
+            # Detached diagnostics are opt-in and evaluated on one mini-batch per selected PPO update.
+            if log_mirror_loss:
+                mirror_loss_metric = self.symmetry.compute_metric(  # type: ignore
+                    self.actor, minibatch, original_batch_size
+                )
+                log_mirror_loss = False
 
             opt_loss = 0.0
             for k, v in opt_losses.items():
@@ -202,9 +226,12 @@ class PPO:
         num_updates = self.num_learning_epochs * self.num_mini_batches
         for k in mean_losses.keys():
             mean_losses[k] = mean_losses[k] / num_updates
+        if mirror_loss_metric is not None:
+            mean_losses["mirror_loss_detach"] = mirror_loss_metric
 
         # Clear the storage
         self.storage.clear()
+        self._update_iteration += 1
 
         return mean_losses
 
@@ -219,7 +246,7 @@ class PPO:
                 )  # type: ignore
 
         # Perform symmetric augmentation
-        if self.symmetry:
+        if self._use_symmetry_augmentation:
             self.symmetry.augment_batch(minibatch, original_batch_size)
 
         # Recompute actions log prob and entropy for current batch of transitions
@@ -285,12 +312,9 @@ class PPO:
         non_opt_losses = dict()
 
         # Symmetry loss
-        if self.symmetry:
+        if self._use_mirror_loss:
             symmetry_loss = self.symmetry.compute_loss(self.actor, minibatch, original_batch_size)
-            if self.symmetry.use_mirror_loss:
-                opt_losses["mirror_loss"] = symmetry_loss
-            else:
-                non_opt_losses["mirror_loss_detach"] = symmetry_loss
+            opt_losses["mirror_loss"] = symmetry_loss
 
         return opt_losses, non_opt_losses
 

@@ -90,3 +90,15 @@ class VecEnv(ABC):
                tensor. If it is a tensor, the mean of the tensor is used for logging.
         """
         raise NotImplementedError
+
+    def compile_symmetry(self) -> None:
+        """Compile environment-owned symmetry transforms before training uses them."""
+        raise NotImplementedError(f"{type(self).__name__} does not support symmetry transforms.")
+
+    def augment_symmetry(
+        self,
+        obs: TensorDict | None = None,
+        actions: torch.Tensor | None = None,
+    ) -> tuple[TensorDict | None, torch.Tensor | None]:
+        """Append mirrored observations and actions along their batch dimension."""
+        raise NotImplementedError(f"{type(self).__name__} does not support symmetry transforms.")

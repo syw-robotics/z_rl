@@ -8,17 +8,54 @@
 from __future__ import annotations
 
 import torch
+from collections.abc import Iterator
 from tensordict import TensorDict
 
+from tests.conftest import make_obs
 from z_rl.algorithms.ppo import PPO
 from z_rl.models import MLPModel
 from z_rl.storage import RolloutStorage
-from tests.conftest import make_obs
 
 NUM_ENVS = 4
 NUM_STEPS = 8
 OBS_DIM = 8
 NUM_ACTIONS = 4
+
+
+class _PassthroughSymmetryEnv:
+    def compile_symmetry(self) -> None:
+        pass
+
+    def augment_symmetry(
+        self,
+        obs: TensorDict | None = None,
+        actions: torch.Tensor | None = None,
+    ) -> tuple[TensorDict | None, torch.Tensor | None]:
+        return obs, actions
+
+
+class _MetricTrackingSymmetry:
+    def __init__(self) -> None:
+        self.compute_calls = 0
+
+    def compute_metric(self, actor: object, minibatch: object, original_batch_size: int) -> torch.Tensor:
+        del actor, minibatch, original_batch_size
+        self.compute_calls += 1
+        return torch.tensor(float(self.compute_calls))
+
+
+class _StaticBatchStorage:
+    def __init__(self, batch: object, num_batches: int) -> None:
+        self.batch = batch
+        self.num_batches = num_batches
+        self.clear_calls = 0
+
+    def mini_batch_generator(self, num_mini_batches: int, num_epochs: int) -> Iterator[object]:
+        assert num_mini_batches * num_epochs == self.num_batches
+        yield from (self.batch for _ in range(self.num_batches))
+
+    def clear(self) -> None:
+        self.clear_calls += 1
 
 
 def _make_actor(obs: TensorDict, obs_groups: dict, num_actions: int = 4, **kwargs: object) -> MLPModel:
@@ -63,6 +100,75 @@ def _build_ppo(**overrides: object) -> tuple[PPO, TensorDict]:
     defaults.update(overrides)
     ppo = PPO(actor, critic, storage, **defaults)
     return ppo, obs
+
+
+def _prepare_metric_only_update(ppo: PPO, obs: TensorDict) -> _StaticBatchStorage:
+    batch = type("Batch", (), {})()
+    batch.observations = obs
+    storage = _StaticBatchStorage(batch, ppo.num_learning_epochs * ppo.num_mini_batches)
+    ppo.storage = storage
+    ppo.compute_loss = lambda minibatch: ({"test_loss": torch.tensor(1.0)}, {})
+    ppo.gradient_step = lambda loss: None
+    return storage
+
+
+def test_symmetry_augmentation_is_the_authoritative_rollout_switch() -> None:
+    ppo, _ = _build_ppo(
+        symmetry_augmentation=True,
+        symmetry_cfg={"env": _PassthroughSymmetryEnv()},
+    )
+
+    assert ppo._use_symmetry_augmentation
+    assert ppo.symmetry._batch_is_augmented
+
+
+class TestMirrorMetricScheduling:
+    """Tests for opt-in, low-frequency detached mirror diagnostics."""
+
+    def test_static_logging_conditions_are_resolved_during_initialization(self) -> None:
+        """PPO should retain an interval only for detached diagnostic logging."""
+        cases = ((False, False, None), (False, True, 3), (True, True, None))
+        for use_mirror_loss, log_mirror_loss, expected_interval in cases:
+            ppo, _ = _build_ppo(
+                symmetry_cfg={
+                    "env": _PassthroughSymmetryEnv(),
+                    "use_mirror_loss": use_mirror_loss,
+                    "log_mirror_loss": log_mirror_loss,
+                    "mirror_loss_log_interval": 3,
+                }
+            )
+            assert ppo._mirror_loss_log_interval == expected_interval
+
+    def test_disabled_metric_has_no_compute_calls(self) -> None:
+        """The default-disabled diagnostic should add no actor evaluations."""
+        ppo, obs = _build_ppo()
+        symmetry = _MetricTrackingSymmetry()
+        ppo.symmetry = symmetry
+        storage = _prepare_metric_only_update(ppo, obs)
+
+        losses = ppo.update()
+
+        assert symmetry.compute_calls == 0
+        assert "mirror_loss_detach" not in losses
+        assert storage.clear_calls == 1
+
+    def test_metric_runs_once_on_each_selected_update(self) -> None:
+        """An enabled diagnostic should run on one minibatch at the configured update interval."""
+        ppo, obs = _build_ppo()
+        symmetry = _MetricTrackingSymmetry()
+        ppo.symmetry = symmetry
+        ppo._mirror_loss_log_interval = 2
+        storage = _prepare_metric_only_update(ppo, obs)
+
+        first_losses = ppo.update()
+        second_losses = ppo.update()
+        third_losses = ppo.update()
+
+        assert symmetry.compute_calls == 2
+        assert torch.equal(first_losses["mirror_loss_detach"], torch.tensor(1.0))
+        assert "mirror_loss_detach" not in second_losses
+        assert torch.equal(third_losses["mirror_loss_detach"], torch.tensor(2.0))
+        assert storage.clear_calls == 3
 
 
 class TestGAEComputation:
@@ -223,6 +329,7 @@ class TestTimeoutBootstrapping:
         # Env 1 should have raw reward only
         stored_reward_env1 = ppo.storage.rewards[0, 1, 0].item()
         assert abs(stored_reward_env1 - 1.0) < 1e-5
+
 
 class TestPPOLosses:
     """Tests for PPO loss computation correctness."""

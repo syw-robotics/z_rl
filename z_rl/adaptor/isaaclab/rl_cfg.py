@@ -23,6 +23,23 @@ from .symmetry_cfg import ZRlSymmetryCfg
 
 
 @configclass
+class ZRlEmpiricalNormalizationCfg:
+    """Advanced observation-normalization settings."""
+
+    decay: float = 1.0
+    """Running-moment decay in (0, 1]. A value of 1.0 uses cumulative statistics."""
+
+    stats_shape: tuple[int, ...] | list[int] | None = None
+    """Optional broadcastable statistics shape. Defaults to the flattened observation shape."""
+
+    eps: float = 1.0e-2
+    """Numerical-stability offset applied to the running standard deviation."""
+
+    until: int | None = None
+    """Optional sample count after which running statistics stop updating."""
+
+
+@configclass
 class ZRlMLPModelCfg:
     """Configuration for the MLP model."""
 
@@ -35,8 +52,8 @@ class ZRlMLPModelCfg:
     activation: str = MISSING
     """The activation function for the MLP network."""
 
-    obs_normalization: bool = False
-    """Whether to normalize the observation for the model. Defaults to False."""
+    obs_normalization: bool | ZRlEmpiricalNormalizationCfg = False
+    """Observation normalization switch or advanced settings. Defaults to False."""
 
     distribution_cfg: DistributionCfg | None = None
     """The configuration for the output distribution. Defaults to None, in which case no distribution is used."""
@@ -104,8 +121,8 @@ class ZRlMoEModelCfg:
     activation: str = MISSING
     """The activation function for the expert and gate networks."""
 
-    obs_normalization: bool = False
-    """Whether to normalize the observation for the model. Defaults to False."""
+    obs_normalization: bool | ZRlEmpiricalNormalizationCfg = False
+    """Observation normalization switch or advanced settings. Defaults to False."""
 
     distribution_cfg: ZRlMLPModelCfg.DistributionCfg | None = None
     """The configuration for the output distribution. Defaults to None, in which case no distribution is used."""
@@ -305,8 +322,14 @@ class ZRlPpoAlgorithmCfg:
     share_cnn_encoders: bool = False
     """Whether to share the CNN networks between actor and critic, in case CNNModels are used. Defaults to False."""
 
+    symmetry_augmentation: bool = False
+    """Whether to append mirrored samples to each rollout mini-batch. Defaults to False.
+
+    The rollout buffer keeps only the original transitions; augmentation is applied lazily during PPO updates.
+    """
+
     symmetry_cfg: ZRlSymmetryCfg | None = None
-    """The symmetry configuration. Defaults to None, in which case symmetry is not used."""
+    """Optional mirror-loss and diagnostic settings."""
 
 
 @configclass

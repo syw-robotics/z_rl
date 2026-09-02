@@ -16,6 +16,7 @@ from z_rl.modules import MLP
 from z_rl.utils import ObsSelector, resolve_obs_temporal_selector
 
 from z_rl.models.composition import ComposableModel, LatentSpec
+from z_rl.models.mlp_model import ObservationNormalizationConfig
 
 
 @dataclass(slots=True)
@@ -135,7 +136,7 @@ class EncoderMLPModel(ComposableModel):
         output_dim: int,
         hidden_dims: tuple[int, ...] | list[int] = (256, 256, 256),
         activation: str = "elu",
-        obs_normalization: bool = False,
+        obs_normalization: ObservationNormalizationConfig = False,
         distribution_cfg: dict | None = None,
         obs_group_time_slice_map: dict[str, dict[str, ObsSelector]] | None = None,
         latent_dim: int = 128,

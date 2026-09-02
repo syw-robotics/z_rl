@@ -17,6 +17,7 @@ from tensordict import TensorDict
 from z_rl.modules import MoE
 
 from z_rl.models.composition import ComposableModel, HeadSpec
+from z_rl.models.mlp_model import ObservationNormalizationConfig
 
 
 @dataclass(slots=True)
@@ -59,7 +60,7 @@ class MoEModel(ComposableModel):
         obs_set: str,
         output_dim: int,
         activation: str = "elu",
-        obs_normalization: bool = False,
+        obs_normalization: ObservationNormalizationConfig = False,
         distribution_cfg: dict | None = None,
         num_experts: int = 4,
         expert_hidden_dims: tuple[int, ...] | list[int] | int = (256,),

@@ -14,6 +14,7 @@ from tensordict import TensorDict
 from z_rl.modules import MLP, VAE
 
 from z_rl.models.composition import ComposableModel, HeadSpec, LatentSpec
+from z_rl.models.mlp_model import ObservationNormalizationConfig
 
 
 @dataclass(slots=True)
@@ -147,7 +148,7 @@ class VAEModel(ComposableModel):
         output_dim: int,
         hidden_dims: tuple[int, ...] | list[int] = (256, 256, 256),
         activation: str = "elu",
-        obs_normalization: bool = False,
+        obs_normalization: ObservationNormalizationConfig = False,
         distribution_cfg: dict | None = None,
         latent_dim: int = 64,
         decoder_input_dim: int | None = None,

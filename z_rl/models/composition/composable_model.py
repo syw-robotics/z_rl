@@ -11,7 +11,7 @@ from tensordict import TensorDict
 
 from z_rl.utils import ObsSelector
 
-from ..mlp_model import MLPModel
+from ..mlp_model import MLPModel, ObservationNormalizationConfig
 from .specs import HeadSpec, LatentSpec
 
 
@@ -26,7 +26,7 @@ class ComposableModel(MLPModel):
         output_dim: int,
         hidden_dims: tuple[int, ...] | list[int] = (256, 256, 256),
         activation: str = "elu",
-        obs_normalization: bool = False,
+        obs_normalization: ObservationNormalizationConfig = False,
         distribution_cfg: dict | None = None,
         obs_group_time_slice_map: dict[str, dict[str, ObsSelector]] | None = None,
         latent_spec: LatentSpec | None = None,

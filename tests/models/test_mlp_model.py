@@ -14,8 +14,9 @@ from tensordict import TensorDict
 import onnx
 import pytest
 
-from z_rl.models import EncoderMLPModel, MLPModel
 from tests.conftest import make_obs
+from z_rl.models import EncoderMLPModel, MLPModel
+from z_rl.modules import EmpiricalNormalization
 
 NUM_ENVS = 4
 OBS_DIM = 8
@@ -95,6 +96,20 @@ class TestMLPModelNormalization:
         assert not torch.allclose(output_before, output_after, atol=1e-3), (
             "Output should change after normalization stats update"
         )
+
+    def test_advanced_normalization_config_is_forwarded(self) -> None:
+        """Advanced normalizer parameters should reach the model-owned normalizer."""
+        model, _ = _make_mlp_model(
+            stochastic=False,
+            obs_set="critic",
+            obs_normalization={"decay": 0.9, "stats_shape": (1,), "eps": 1.0e-4},
+        )
+
+        normalizer = model.latent_adapter.obs_normalizer
+        assert isinstance(normalizer, EmpiricalNormalization)
+        assert normalizer.decay == pytest.approx(0.9)
+        assert normalizer.stats_shape == torch.Size((1,))
+        assert normalizer.eps == pytest.approx(1.0e-4)
 
 
 class TestObsGroupConcatenation:

@@ -11,7 +11,7 @@ import torch
 import torch.nn as nn
 from tensordict import TensorDict
 
-from z_rl.models.mlp_model import MLPModel, _as_export_latent_adapter
+from z_rl.models.mlp_model import MLPModel, ObservationNormalizationConfig, _as_export_latent_adapter
 from z_rl.modules import RNN, HiddenState
 
 
@@ -35,7 +35,7 @@ class RNNModel(MLPModel):
         output_dim: int,
         hidden_dims: tuple[int, ...] | list[int] = (256, 256, 256),
         activation: str = "elu",
-        obs_normalization: bool = False,
+        obs_normalization: ObservationNormalizationConfig = False,
         distribution_cfg: dict | None = None,
         rnn_type: str = "lstm",
         rnn_hidden_dim: int = 256,

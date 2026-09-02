@@ -15,6 +15,10 @@ from z_rl.modules import MLP, EmpiricalNormalization, HiddenState
 from z_rl.modules.distribution import Distribution
 from z_rl.utils import ObsSelector, resolve_callable, unpad_trajectories
 
+# IsaacLab normalization config classes become dictionaries before reaching core models; booleans preserve the
+# concise disabled/default-normalizer interface.
+ObservationNormalizationConfig = bool | dict[str, object]
+
 
 class MLPModel(nn.Module):
     """MLP-based neural model.
@@ -37,7 +41,7 @@ class MLPModel(nn.Module):
         output_dim: int,
         hidden_dims: tuple[int, ...] | list[int] = (256, 256, 256),
         activation: str = "elu",
-        obs_normalization: bool = False,
+        obs_normalization: ObservationNormalizationConfig = False,
         distribution_cfg: dict | None = None,
         obs_group_time_slice_map: dict[str, dict[str, ObsSelector]] | None = None,
     ) -> None:
@@ -50,7 +54,8 @@ class MLPModel(nn.Module):
             output_dim: Dimension of the output.
             hidden_dims: Hidden dimensions of the MLP.
             activation: Activation function of the MLP.
-            obs_normalization: Whether to normalize the observations before feeding them to the MLP.
+            obs_normalization: False disables normalization, True uses its defaults, and a dictionary configures
+                ``EmpiricalNormalization``.
             distribution_cfg: Configuration dictionary for the output distribution. If provided, the model outputs
                 stochastic values sampled from the distribution.
             obs_group_time_slice_map: Cached time-slice metadata, typically from ``VecEnv.obs_group_time_slice_map``.
@@ -170,7 +175,7 @@ class MLPModel(nn.Module):
         obs: TensorDict,
         obs_groups: dict[str, list[str]],
         obs_set: str,
-        obs_normalization: bool,
+        obs_normalization: ObservationNormalizationConfig,
         obs_group_time_slice_map: dict[str, dict[str, ObsSelector]] | None,
     ) -> None:
         """Resolve observation metadata and build the normalization stage."""
@@ -179,11 +184,12 @@ class MLPModel(nn.Module):
         self.obs_group_time_slice_map = obs_group_time_slice_map or {}
         self.obs_normalization = obs_normalization
 
-    def _build_obs_normalizer(self, obs_normalization: bool) -> nn.Module:
+    def _build_obs_normalizer(self, obs_normalization: ObservationNormalizationConfig) -> nn.Module:
         """Build the observation normalizer used before latent construction."""
-        if obs_normalization:
-            return EmpiricalNormalization(self.obs_dim)
-        return torch.nn.Identity()
+        if obs_normalization is False:
+            return torch.nn.Identity()
+        normalization_cfg = {} if obs_normalization is True else obs_normalization
+        return EmpiricalNormalization(self.obs_dim, **normalization_cfg)
 
     def _build_distribution(
         self, output_dim: int, distribution_cfg: dict | None

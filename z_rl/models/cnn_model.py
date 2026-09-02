@@ -12,7 +12,7 @@ import torch.nn as nn
 from tensordict import TensorDict
 from typing import Any
 
-from z_rl.models.mlp_model import MLPModel, _as_export_latent_adapter
+from z_rl.models.mlp_model import MLPModel, ObservationNormalizationConfig, _as_export_latent_adapter
 from z_rl.modules import CNN, HiddenState, MLP
 from z_rl.utils import resolve_nn_activation
 
@@ -36,7 +36,7 @@ class CNNModel(MLPModel):
         output_dim: int,
         hidden_dims: tuple[int, ...] | list[int] = (256, 256, 256),
         activation: str = "elu",
-        obs_normalization: bool = False,
+        obs_normalization: ObservationNormalizationConfig = False,
         distribution_cfg: dict | None = None,
         cnn_cfg: dict[str, dict] | dict[str, Any] | None = None,
         cnn_projection_cfg: dict[str, dict] | dict[str, Any] | None = None,

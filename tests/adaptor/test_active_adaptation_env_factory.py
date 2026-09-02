@@ -80,7 +80,7 @@ def test_factory_builds_registered_backend_without_aa_policy(
     monkeypatch: pytest.MonkeyPatch,
 ) -> None:
     """Construct the registered backend, TorchRL transforms, and rank-local seed."""
-    transformed_env_cls, imported_modules = _install_factory_modules(monkeypatch, backend="isaac")
+    transformed_env_cls, imported_modules = _install_factory_modules(monkeypatch, backend="isaaclab")
     task_cfg = {"name": "fake-task"}
 
     env = make_active_adaptation_env(
@@ -96,4 +96,4 @@ def test_factory_builds_registered_backend_without_aa_policy(
     assert env.base_env.device == "cuda:2"
     assert env.base_env.headless is True
     assert env.seed == 42
-    assert imported_modules == ["active_adaptation.envs.backends.isaac"]
+    assert imported_modules == ["active_adaptation.envs.backends.isaaclab"]

@@ -60,6 +60,7 @@ class ActiveAdaptationVecEnvWrapper(VecEnv):
         self.discount_mode = discount_mode
         self.include_episode_stats = include_episode_stats
         self._discount_warning_emitted = False
+        self._symmetry_compiler = None
 
         self.num_envs = int(self.unwrapped.num_envs)
         self.device = self.unwrapped.device
@@ -138,6 +139,22 @@ class ActiveAdaptationVecEnvWrapper(VecEnv):
         observations = self.get_observations()
         dones = done_mask.to(dtype=torch.long)
         return observations, rewards, dones, extras
+
+    def compile_symmetry(self) -> None:
+        """Compile selected AA observation-group and action symmetry transforms."""
+        if self._symmetry_compiler is None:
+            from .symmetry import ActiveAdaptationSymmetryCompiler
+
+            self._symmetry_compiler = ActiveAdaptationSymmetryCompiler(self)
+
+    def augment_symmetry(
+        self,
+        obs: TensorDict | None = None,
+        actions: torch.Tensor | None = None,
+    ) -> tuple[TensorDict | None, torch.Tensor | None]:
+        """Append mirrored AA observations and actions along the batch dimension."""
+        self.compile_symmetry()
+        return self._symmetry_compiler.augment(obs=obs, actions=actions)
 
     def close(self) -> None:
         """Close the wrapped AA environment."""

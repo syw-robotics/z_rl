@@ -6,6 +6,11 @@
 """Adapters for using Active Adaptation environments with Z-RL."""
 
 from .env_factory import make_active_adaptation_env
+from .symmetry import ActiveAdaptationSymmetryCompiler
 from .vecenv_wrapper import ActiveAdaptationVecEnvWrapper
 
-__all__ = ["ActiveAdaptationVecEnvWrapper", "make_active_adaptation_env"]
+__all__ = [
+    "ActiveAdaptationSymmetryCompiler",
+    "ActiveAdaptationVecEnvWrapper",
+    "make_active_adaptation_env",
+]

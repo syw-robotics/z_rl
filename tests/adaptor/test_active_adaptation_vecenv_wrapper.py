@@ -17,8 +17,28 @@ from z_rl.adaptor.active_adaptation import ActiveAdaptationVecEnvWrapper
 from z_rl.runners import OnPolicyRunner
 
 
+class _MirrorTransform:
+    def __init__(self, perm: list[int], signs: list[float]) -> None:
+        self.perm = torch.tensor(perm)
+        self.signs = torch.tensor(signs)
+        self.channel_signs = None
+
+
 class _ActionManager:
     action_dim = 2
+
+    def symmetry_transform(self) -> _MirrorTransform:
+        return _MirrorTransform([1, 0], [-1.0, -1.0])
+
+
+class _ObservationGroup:
+    def __init__(self, transform: _MirrorTransform) -> None:
+        self.transform = transform
+        self.symmetry_calls = 0
+
+    def symmetry_transform(self) -> _MirrorTransform:
+        self.symmetry_calls += 1
+        return self.transform
 
 
 class _BaseEnv:
@@ -27,6 +47,10 @@ class _BaseEnv:
         self.device = torch.device("cpu")
         self.cfg = {"name": "fake-aa"}
         self.input_managers = {"action": _ActionManager()}
+        self.observation_groups = {
+            "policy": _ObservationGroup(_MirrorTransform([1, 0, 3, 2], [-1.0, -1.0, 1.0, 1.0])),
+            "priv": _ObservationGroup(_MirrorTransform([0, 1], [1.0, -1.0])),
+        }
         self.max_episode_length = torch.full((num_envs, 1), 8, dtype=torch.long)
         self.episode_length_buf = torch.zeros(num_envs, dtype=torch.long)
 
@@ -194,7 +218,7 @@ def test_wrapper_maps_aa_transition_to_z_rl_contract() -> None:
         "Episode/episode_len",
     }
     assert extras["log_on_done"] is True
-    assert extras["log_scale"]["Episode_Reward/loco/track_velocity"] == 1 / 8
+    assert extras["log_scale"]["Episode_Reward/loco/track_velocity"] == pytest.approx(1 / 8)
     torch.testing.assert_close(
         extras["log"]["Episode_Reward/loco/track_velocity"],
         torch.tensor([[1.0], [2.0], [3.0], [4.0]]),
@@ -264,6 +288,46 @@ def test_wrapper_validates_action_shape() -> None:
         env.step(torch.zeros(4, 3))
 
 
+def test_wrapper_compiles_and_applies_aa_symmetry() -> None:
+    """Use AA group/action transforms to append one mirrored copy."""
+    env = _make_wrapper()
+    observations = TensorDict(
+        {
+            "policy": torch.tensor([[1.0, 2.0, 3.0, 4.0]]),
+            "priv": torch.tensor([[5.0, 6.0]]),
+        },
+        batch_size=[1],
+    )
+    actions = torch.tensor([[7.0, 8.0]])
+
+    observations_aug, actions_aug = env.augment_symmetry(observations, actions)
+    env.compile_symmetry()
+
+    assert observations_aug is not None
+    assert actions_aug is not None
+    assert observations_aug.batch_size == torch.Size([2])
+    torch.testing.assert_close(
+        observations_aug["policy"],
+        torch.tensor([[1.0, 2.0, 3.0, 4.0], [-2.0, -1.0, 4.0, 3.0]]),
+    )
+    torch.testing.assert_close(
+        observations_aug["priv"],
+        torch.tensor([[5.0, 6.0], [5.0, -6.0]]),
+    )
+    torch.testing.assert_close(actions_aug, torch.tensor([[7.0, 8.0], [-8.0, -7.0]]))
+    assert env.unwrapped.observation_groups["policy"].symmetry_calls == 1
+    assert env.unwrapped.observation_groups["priv"].symmetry_calls == 1
+
+
+def test_wrapper_rejects_non_vector_symmetry_observation() -> None:
+    """Keep non-vector observation symmetry outside the current adaptor scope."""
+    env = _make_wrapper()
+    env._carry["policy"] = torch.zeros(4, 2, 2)
+
+    with pytest.raises(ValueError, match="must have shape"):
+        env.compile_symmetry()
+
+
 def test_current_z_rl_ppo_runner_trains_through_wrapper() -> None:
     """Collect and update current Z-RL PPO through the AA wrapper."""
     env = ActiveAdaptationVecEnvWrapper(
@@ -275,6 +339,32 @@ def test_current_z_rl_ppo_runner_trains_through_wrapper() -> None:
     runner.learn(num_learning_iterations=1)
 
     assert runner.current_learning_iteration == 0
+    assert env.env.step_calls == 2
+
+
+def test_current_z_rl_ppo_runner_trains_with_aa_symmetry() -> None:
+    """Run lazy symmetry augmentation and mirror loss through the AA wrapper."""
+    env = ActiveAdaptationVecEnvWrapper(
+        _FakeAAEnv(),
+        observation_keys=("policy",),
+        reward_keys=("loco",),
+    )
+    train_cfg = _train_config()
+    train_cfg["algorithm"].update(
+        {
+            "symmetry_augmentation": True,
+            "symmetry_cfg": {
+                "use_mirror_loss": True,
+                "mirror_loss_coeff": 0.1,
+            },
+        }
+    )
+
+    runner = OnPolicyRunner(env, train_cfg, log_dir=None, device="cpu")
+    runner.learn(num_learning_iterations=1)
+
+    assert runner.alg._use_symmetry_augmentation
+    assert runner.alg._use_mirror_loss
     assert env.env.step_calls == 2
 
 

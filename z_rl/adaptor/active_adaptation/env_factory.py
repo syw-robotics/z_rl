@@ -12,7 +12,7 @@ import importlib
 from typing import Any
 
 _BACKEND_MODULES = {
-    "isaac": "active_adaptation.envs.backends.isaac",
+    "isaaclab": "active_adaptation.envs.backends.isaaclab",
     "mujoco": "active_adaptation.envs.backends.mujoco",
     "mjlab": "active_adaptation.envs.backends.mjlab",
     "motrix": "active_adaptation.envs.backends.motrix",
@@ -31,7 +31,7 @@ def make_active_adaptation_env(
     ``active_adaptation.init(...)`` must be called before this function. Imports
     stay local so importing :mod:`z_rl` does not require AA or TorchRL.
     """
-    import active_adaptation as aa
+    aa: Any = importlib.import_module("active_adaptation")
 
     backend = aa.get_backend()
     if backend is None:
@@ -48,7 +48,7 @@ def make_active_adaptation_env(
     from torchrl.envs import Compose, InitTracker, StepCounter, TransformedEnv
 
     task_cfg = copy.deepcopy(task_cfg)
-    if backend == "isaac":
+    if backend == "isaaclab":
         env_class_name = task_cfg.get("env_class", "IsaacBackendEnv")
         env_device = str(device)
     elif backend == "mjlab":

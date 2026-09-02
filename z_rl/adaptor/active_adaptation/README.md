@@ -3,7 +3,7 @@
 This adaptor lets the current Z-RL on-policy runner use an [Active Adaptation
 (AA)](https://github.com/Agent-3154/active-adaptation) environment without constructing or importing an AA learning policy. It
 wraps AA above its backend-independent TorchRL environment boundary, so the same
-wrapper applies to Isaac, Mjlab, Mujoco, and Motrix environments supported by AA.
+wrapper applies to IsaacLab, Mjlab, Mujoco, and Motrix environments supported by AA.
 
 ## Scope
 
@@ -14,6 +14,7 @@ This early version supports:
 - explicit aggregation of one or more AA reward groups
 - AA automatic reset, termination, truncation, and optional detailed episode statistics
 - pass-through of AA's per-step discount in `extras["discount"]`
+- lazy PPO symmetry augmentation and mirror loss for dense vector observation groups
 
 Current Z-RL PPO does not consume AA's per-step discount. `discount_mode="ignore"`
 continues with Z-RL's done-based return semantics without synchronizing the GPU
@@ -69,6 +70,24 @@ z_rl_cfg["obs_groups"] = {
 }
 ```
 
+Enable symmetry augmentation through the standard Z-RL PPO configuration. The
+adaptor compiles the selected AA observation-group transforms and configured
+action-input transform once, then appends mirrored samples only while updating
+PPO mini-batches.
+
+```python
+z_rl_cfg["algorithm"]["symmetry_augmentation"] = True
+z_rl_cfg["algorithm"]["symmetry_cfg"] = {
+    "use_mirror_loss": True,
+    "mirror_loss_coeff": 0.1,
+}
+```
+
+Every selected observation group and the action input must provide an AA
+`SymmetryTransform`. The current adaptor supports dense tensors shaped
+`(num_envs, features)`; transforms are checked for matching width and for being
+involutive signed permutations before training starts.
+
 With episode statistics enabled, AA reward terms are logged as
 `Episode_Reward/<term>` and termination terms as
 `Episode_Termination/<term>`. Reward terms are divided by AA's configured
@@ -79,3 +98,10 @@ completed-environment indices, so this path adds no device-host synchronization.
 `make_active_adaptation_env()` deliberately uses AA's `_EnvBase.registry` because
 AA currently has no public environment-only factory. Pin the AA version and run
 the adaptor contract tests when updating AA.
+
+## TODO
+
+- Consume AA's per-step discount in Z-RL GAE for objective parity with AA PPO.
+- Coordinate AA and Z-RL distributed initialization for multi-GPU training.
+- Materialize and mirror AA functional observation groups.
+- Support image/channel symmetry and other non-vector observation layouts.

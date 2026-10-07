@@ -16,8 +16,17 @@ import warnings
 from collections import deque
 
 import z_rl
-from z_rl.utils.log_writer import LogWriter
+from z_rl.utils.log_writers import LogWriter
 from z_rl.utils.utils import resolve_callable, resolve_class
+
+# Plain-string logger names kept for old configs. Dict configs pass class_name directly.
+_LOGGER_ALIASES = {
+    "neptune": ("NeptuneLogWriter", "neptune_project"),
+    "wandb": ("WandbLogWriter", "wandb_project"),
+    "swanlab": ("SwanLabLogWriter", "swanlab_project"),
+}
+# These writers use one step axis, so wall-clock series are omitted.
+_ITERATION_STEP_LOGGERS = {"WandbLogWriter", "SwanLabLogWriter"}
 
 
 class Logger:
@@ -64,28 +73,17 @@ class Logger:
             logger_cfg = self.cfg.get("logger", "tensorboard")
             self.logger_type = logger_cfg["class_name"] if isinstance(logger_cfg, dict) else logger_cfg.lower()
 
-            if self.logger_type == "neptune":
+            if self.logger_type in _LOGGER_ALIASES:
+                class_name, project_key = _LOGGER_ALIASES[self.logger_type]
                 warnings.warn(
-                    "cfg['logger'] = 'neptune' is deprecated. "
-                    "Use {'class_name': 'NeptuneLogWriter', 'project_name': ...} instead.",
+                    f"cfg['logger'] = {self.logger_type!r} is deprecated. "
+                    f"Use {{'class_name': {class_name!r}, 'project_name': ...}} instead.",
                     DeprecationWarning,
                     stacklevel=2,
                 )
-                from z_rl.utils.neptune_utils import NeptuneLogWriter
-
-                self.logger_type = "NeptuneLogWriter"
-                self.writer = NeptuneLogWriter(log_dir=self.log_dir, project_name=self.cfg.get("neptune_project"))
-            elif self.logger_type == "wandb":
-                warnings.warn(
-                    "cfg['logger'] = 'wandb' is deprecated. "
-                    "Use {'class_name': 'WandbLogWriter', 'project_name': ...} instead.",
-                    DeprecationWarning,
-                    stacklevel=2,
-                )
-                from z_rl.utils.wandb_utils import WandbLogWriter
-
-                self.logger_type = "WandbLogWriter"
-                self.writer = WandbLogWriter(log_dir=self.log_dir, project_name=self.cfg.get("wandb_project"))
+                writer_class = resolve_callable(class_name)
+                self.logger_type = class_name
+                self.writer = writer_class(log_dir=self.log_dir, project_name=self.cfg.get(project_key))
             elif self.logger_type == "tensorboard":
                 from torch.utils.tensorboard import SummaryWriter
 
@@ -157,7 +155,7 @@ class Logger:
     ) -> None:
         """Log the training metrics to the logging service and print them to the console.
 
-        If videos are available, they are uploaded to the logging service (W&B) as well.
+        If videos are available, they are uploaded to the logging service as well.
         """
         if self.writer is not None:
             collection_size = self.cfg["num_steps_per_env"] * self.num_envs * self.gpu_world_size
@@ -209,7 +207,7 @@ class Logger:
             if len(self.rewbuffer) > 0:
                 self.writer.add_scalar("Train/mean_reward", statistics.mean(self.rewbuffer), it)
                 self.writer.add_scalar("Train/mean_episode_length", statistics.mean(self.lenbuffer), it)
-                if self.logger_type != "WandbLogWriter":
+                if self.logger_type not in _ITERATION_STEP_LOGGERS:
                     self.writer.add_scalar(
                         "Train/mean_reward/time", statistics.mean(self.rewbuffer), int(self.tot_time)
                     )

@@ -210,6 +210,23 @@ class MLPModel(nn.Module):
         if self._update_normalization is not None:
             self._update_normalization(obs)
 
+    def module_state_dicts(self) -> dict[str, dict[str, torch.Tensor]]:
+        """Return one state dict per direct child.
+
+        Children are ``latent_adapter``, ``head``, and, when present, ``rnn`` and ``distribution``.
+        Names inside each dict are relative to that child.
+        """
+        return {name: child.state_dict() for name, child in self.named_children()}
+
+    def load_module_state_dict(
+        self, module_name: str, state_dict: dict[str, torch.Tensor], strict: bool = True
+    ) -> None:
+        """Load one direct child from a module state dict."""
+        children = dict(self.named_children())
+        if module_name not in children:
+            raise KeyError(f"Module `{module_name}` is not a direct child. Available: {sorted(children)}.")
+        children[module_name].load_state_dict(state_dict, strict=strict)
+
     def build_latent_adapter(self) -> nn.Module:
         """Build the latent adapter that maps observations to the head input.
         This barely concatenates and normalizes observation groups.

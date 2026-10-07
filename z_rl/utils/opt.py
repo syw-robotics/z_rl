@@ -6,8 +6,13 @@
 from __future__ import annotations
 
 import warnings
+from collections.abc import Sequence
+from itertools import chain
 
 import torch
+import torch.nn as nn
+
+from z_rl.utils.utils import resolve_optimizer
 
 
 class OptimizerGroup(torch.optim.Optimizer):
@@ -136,3 +141,22 @@ class MuonAdamWWrapper(OptimizerGroup):
                 "unfreeze at least some weights or pass ignore_frozen=False."
             )
         super().__init__(optimizers)
+
+
+def build_optimizer(
+    modules: Sequence[nn.Module],
+    *,
+    learning_rate: float,
+    optimizer: str = "adam",
+    use_muon: bool = False,
+    muon_adamw_weight_decay: float = 0.01,
+) -> torch.optim.Optimizer:
+    """Build the optimizer shared by PPO and distillation.
+
+    When ``use_muon`` is enabled, hidden 2-D weights go to Muon and the remaining parameters stay on AdamW.
+    The named ``optimizer`` is ignored in that case. Otherwise every parameter of ``modules`` uses that optimizer.
+    """
+    if use_muon:
+        return MuonAdamWWrapper(list(modules), lr=learning_rate, weight_decay=muon_adamw_weight_decay)
+    params = chain.from_iterable(module.parameters() for module in modules)
+    return resolve_optimizer(optimizer)(params, lr=learning_rate)

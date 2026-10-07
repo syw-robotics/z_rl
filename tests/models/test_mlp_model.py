@@ -16,9 +16,16 @@ import onnx
 import pytest
 
 from tests.conftest import make_obs
-from z_rl.models import GroupObsLatentAdapter, MLPEncoderModel, MLPModel, ObsLatentAdapter
+from z_rl.models import (
+    GroupMLPEncoderModel,
+    GroupObsLatentAdapter,
+    MLPEncoderModel,
+    MLPModel,
+    ObsLatentAdapter,
+)
 from z_rl.modules import EmpiricalNormalization
 from z_rl.utils import ObsSelector
+from z_rl.utils.checkpoint import module_state_dict_from_checkpoint
 
 NUM_ENVS = 4
 OBS_DIM = 8
@@ -445,3 +452,46 @@ class TestGroupObsLatentAdapter:
                 encoders={"prop": nn.Identity()},
                 obs_normalizers={"prop": nn.Identity(), "scan": nn.Identity()},
             )
+
+
+class TestModuleCheckpoints:
+    """Per-child checkpoint entries used to initialize one module from another model."""
+
+    def test_group_encoder_modules_round_trip_without_touching_the_head(self) -> None:
+        obs = TensorDict(
+            {"proprio": torch.randn(NUM_ENVS, 6), "object": torch.randn(NUM_ENVS, 4)},
+            batch_size=[NUM_ENVS],
+        )
+        encoder_cfgs = {
+            "proprio": {"output_dim": 5, "hidden_dims": [8]},
+            "object": {"output_dim": 3, "hidden_dims": []},
+        }
+        teacher = GroupMLPEncoderModel(
+            obs, {"actor": ["proprio", "object"]}, "actor", 2, hidden_dims=[8], encoder_cfgs=encoder_cfgs
+        )
+        student = GroupMLPEncoderModel(
+            obs, {"actor": ["proprio", "object"]}, "actor", 2, hidden_dims=[8], encoder_cfgs=encoder_cfgs
+        )
+        student_head = {key: value.clone() for key, value in student.head.state_dict().items()}
+
+        modules = teacher.module_state_dicts()
+        student.load_module_state_dict("latent_adapter", modules["latent_adapter"])
+
+        assert set(modules) == {"latent_adapter", "head"}
+        assert "encoders.proprio.0.weight" in modules["latent_adapter"]
+        assert "encoders.object.weight" in modules["latent_adapter"]
+        assert torch.equal(
+            student.latent_adapter.encoders["proprio"][0].weight,
+            teacher.latent_adapter.encoders["proprio"][0].weight,
+        )
+        assert all(torch.equal(student.head.state_dict()[key], student_head[key]) for key in student_head)
+
+    def test_old_flat_checkpoint_and_teacher_role_fallback(self) -> None:
+        teacher, _obs = _make_mlp_model(stochastic=True)
+        checkpoint = {"actor_state_dict": teacher.state_dict()}
+
+        head = module_state_dict_from_checkpoint(checkpoint, "head", role="teacher")
+
+        assert torch.equal(head["0.weight"], teacher.head.state_dict()["0.weight"])
+        with pytest.raises(KeyError, match="not found"):
+            module_state_dict_from_checkpoint(checkpoint, "rnn", role="actor")

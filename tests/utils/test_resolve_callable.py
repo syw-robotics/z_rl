@@ -128,6 +128,7 @@ class TestResolveCallableSimpleName:
         """Should resolve optional logger writers without initializing external services."""
         assert resolve_callable("WandbLogWriter").__name__ == "WandbLogWriter"
         assert resolve_callable("NeptuneLogWriter").__name__ == "NeptuneLogWriter"
+        assert resolve_callable("SwanLabLogWriter").__name__ == "SwanLabLogWriter"
 
     def test_simple_name_unknown(self) -> None:
         """Should raise ValueError for unknown simple names."""

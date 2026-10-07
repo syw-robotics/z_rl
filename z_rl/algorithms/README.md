@@ -89,6 +89,7 @@ Main responsibilities of `Distillation`:
 One important loading behavior:
 
 - when loading an RL checkpoint and `load_cfg` is omitted, the teacher defaults to `actor_state_dict`
+- checkpoints also store `student_modules` and `teacher_modules` (PPO: `actor_modules`, `critic_modules`). `z_rl.utils.checkpoint` packs and reads those entries. `load_cfg["student_modules"]` maps a student child name to a source role, for example `{"head": "actor"}`, and copies that child after any full student load
 
 ## Construction Flow
 

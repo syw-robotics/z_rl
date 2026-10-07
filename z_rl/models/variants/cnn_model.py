@@ -128,7 +128,7 @@ class CNNLatentSpec(LatentSpec):
 
     def build(self, model: nn.Module) -> nn.Module:
         """Build a group adapter with a CNN encoder on the specified 2D observation group."""
-        image_encoder = self._make_encoder(model)
+        image_encoder = self._make_cnn_encoder(model)
         encoders = {}
         normalizers = {}
         group_dims = []
@@ -181,7 +181,7 @@ class CNNLatentSpec(LatentSpec):
             self.append_obs_group, "last", model.obs_group_time_slice_map
         ).dim
 
-    def _make_encoder(self, model: nn.Module) -> nn.Sequential:
+    def _make_cnn_encoder(self, model: nn.Module) -> nn.Sequential:
         """Build ``CNN -> optional projector`` and record the CNN latent width."""
         channels, height, width = model.obs_group_shapes[self.image_obs_group]
         cnn = CNN(input_dim=(int(height), int(width)), input_channels=int(channels), **self.cnn_cfg)

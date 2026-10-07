@@ -11,7 +11,7 @@ import torch
 import torch.nn as nn
 
 from z_rl.modules import MLP
-from z_rl.utils.opt import MuonAdamWWrapper, OptimizerGroup
+from z_rl.utils.opt import MuonAdamWWrapper, OptimizerGroup, build_optimizer
 
 
 class _TinyModel(nn.Module):
@@ -52,3 +52,30 @@ def test_muon_adamw_wrapper_splits_parameters() -> None:
     state = wrapper.state_dict()
 
     assert len(state["optimizers"]) == 2
+
+
+def test_build_optimizer_uses_named_optimizer() -> None:
+    model = nn.Linear(2, 2)
+    optimizer = build_optimizer([model], learning_rate=1e-3, optimizer="sgd")
+
+    assert isinstance(optimizer, torch.optim.SGD)
+    assert optimizer.defaults["lr"] == 1e-3
+
+
+def test_build_optimizer_use_muon_ignores_named_optimizer() -> None:
+    if not hasattr(torch.optim, "Muon"):
+        return
+
+    model = _TinyModel()
+    optimizer = build_optimizer(
+        [model],
+        learning_rate=1e-3,
+        optimizer="sgd",
+        use_muon=True,
+        muon_adamw_weight_decay=0.05,
+    )
+    adamw = next(item for item in optimizer.optimizers if isinstance(item, torch.optim.AdamW))
+
+    assert isinstance(optimizer, MuonAdamWWrapper)
+    assert not any(isinstance(item, torch.optim.SGD) for item in optimizer.optimizers)
+    assert adamw.defaults["weight_decay"] == 0.05

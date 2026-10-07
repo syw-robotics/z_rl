@@ -30,6 +30,7 @@ def _make_distillation_setup(
     obs_normalization: bool = False,
     use_mixed_precision: bool = False,
     multi_gpu_cfg: dict | None = None,
+    **alg_kwargs,
 ) -> tuple:
     """Build a Distillation instance with small networks."""
     obs = make_obs(NUM_ENVS, OBS_DIM)
@@ -51,6 +52,7 @@ def _make_distillation_setup(
         learning_rate=1e-3,
         use_mixed_precision=use_mixed_precision,
         multi_gpu_cfg=multi_gpu_cfg,
+        **alg_kwargs,
     )
     return alg, obs, storage
 
@@ -193,3 +195,39 @@ class TestDistillationMixedPrecision:
         assert torch.isfinite(torch.tensor(loss_dict["behavior"]))
         after = list(alg.student.parameters())
         assert any(not torch.equal(b, a) for b, a in zip(before, after)), "student params should change"
+
+
+def test_use_muon_builds_split_optimizer_for_student_only() -> None:
+    if not hasattr(torch.optim, "Muon"):
+        return
+
+    alg, _obs, _storage = _make_distillation_setup(use_muon=True, muon_adamw_weight_decay=0.123)
+    optimized = {id(param) for group in alg.optimizer.param_groups for param in group["params"]}
+    student_ids = {id(param) for param in alg.student.parameters() if param.requires_grad}
+    teacher_ids = {id(param) for param in alg.teacher.parameters()}
+    adamw = next(optimizer for optimizer in alg.optimizer.optimizers if isinstance(optimizer, torch.optim.AdamW))
+
+    assert student_ids <= optimized
+    assert optimized.isdisjoint(teacher_ids)
+    assert adamw.defaults["weight_decay"] == 0.123
+
+
+class TestModuleCheckpointInit:
+    """Copy selected teacher or actor children onto the student."""
+
+    def test_save_stores_child_modules_and_load_copies_one_child(self) -> None:
+        alg, _obs, _storage = _make_distillation_setup()
+        saved = alg.save()
+        fresh, _obs, _storage = _make_distillation_setup()
+        student_encoder = {
+            key: value.clone() for key, value in fresh.student.latent_adapter.state_dict().items()
+        }
+
+        fresh.load(saved, {"student_modules": {"head": "teacher"}}, strict=True)
+
+        assert set(saved["teacher_modules"]) == {"latent_adapter", "head"}
+        assert torch.equal(fresh.student.head.state_dict()["0.weight"], alg.teacher.head.state_dict()["0.weight"])
+        assert all(
+            torch.equal(fresh.student.latent_adapter.state_dict()[key], student_encoder[key]) for key in student_encoder
+        )
+        assert fresh.teacher_loaded is False

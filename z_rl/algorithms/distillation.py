@@ -20,8 +20,9 @@ from z_rl.utils import (
     reduce_gradients_in_buckets,
     resolve_class,
     resolve_obs_groups,
-    resolve_optimizer,
 )
+from z_rl.utils.checkpoint import model_checkpoint_entries, module_state_dict_from_checkpoint
+from z_rl.utils.opt import build_optimizer
 
 
 def _pop_model_init_config(model_cfg: dict) -> tuple[float | tuple[float, ...] | None, bool | None]:
@@ -75,6 +76,8 @@ class Distillation:
         max_grad_norm: float | None = None,
         loss_type: str = "mse",
         optimizer: str = "adam",
+        use_muon: bool = False,  # Muon for hidden 2-D weights; AdamW for biases/heads (see utils.opt)
+        muon_adamw_weight_decay: float = 0.01,
         use_mixed_precision: bool = False,
         student_stochastic_output: bool = False,
         device: str = "cpu",
@@ -103,8 +106,14 @@ class Distillation:
         self._raw_student = self.student
         self._raw_teacher = self.teacher
 
-        # Create the optimizer
-        self.optimizer = resolve_optimizer(optimizer)(self.student.parameters(), lr=learning_rate)  # type: ignore
+        # Only the student is optimized. Teacher stays out of the optimizer even if its parameters are unfrozen.
+        self.optimizer = build_optimizer(
+            [self.student],
+            learning_rate=learning_rate,
+            optimizer=optimizer,
+            use_muon=use_muon,
+            muon_adamw_weight_decay=muon_adamw_weight_decay,
+        )
 
         # Add storage
         self.storage = storage
@@ -245,8 +254,8 @@ class Distillation:
     def save(self) -> dict:
         """Return a dict of all models for saving."""
         saved_dict = {
-            "student_state_dict": self._raw_student.state_dict(),
-            "teacher_state_dict": self._raw_teacher.state_dict(),
+            **model_checkpoint_entries("student", self._raw_student),
+            **model_checkpoint_entries("teacher", self._raw_teacher),
             "optimizer_state_dict": self.optimizer.state_dict(),
         }
         return saved_dict
@@ -267,6 +276,15 @@ class Distillation:
         # Load the specified models
         if load_cfg.get("student"):
             self._raw_student.load_state_dict(loaded_dict["student_state_dict"], strict=strict)
+        student_modules = load_cfg.get("student_modules")
+        if student_modules:
+            if not isinstance(student_modules, dict):
+                raise TypeError("`student_modules` must map module names to checkpoint roles.")
+            for module_name, source_role in student_modules.items():
+                if not isinstance(module_name, str) or not isinstance(source_role, str):
+                    raise TypeError("`student_modules` must map module names to checkpoint roles.")
+                module_state = module_state_dict_from_checkpoint(loaded_dict, module_name, role=source_role)
+                self._raw_student.load_module_state_dict(module_name, module_state, strict=strict)
         if load_cfg.get("teacher"):
             self._raw_teacher.load_state_dict(
                 loaded_dict.get("teacher_state_dict") or loaded_dict["actor_state_dict"], strict=strict

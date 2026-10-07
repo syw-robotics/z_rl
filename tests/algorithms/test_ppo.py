@@ -545,3 +545,14 @@ class TestLoadRestoresLearningRate:
 
         assert restored.learning_rate == resumed_lr
         assert restored.optimizer.param_groups[0]["lr"] == resumed_lr
+
+
+class TestModuleCheckpoint:
+    def test_save_keeps_flat_state_and_adds_child_modules(self) -> None:
+        ppo, _obs = _build_ppo()
+        saved = ppo.save()
+
+        assert "actor_state_dict" in saved
+        assert set(saved["actor_modules"]) >= {"latent_adapter", "head", "distribution"}
+        assert torch.equal(saved["actor_modules"]["head"]["0.weight"], saved["actor_state_dict"]["head.0.weight"])
+        assert set(saved["critic_modules"]) == {"latent_adapter", "head"}

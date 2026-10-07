@@ -19,7 +19,10 @@ from ..composition import ComposablePPO, PPOLossSpec
 
 @dataclass
 class EncoderEstimationLossSpec(PPOLossSpec):
-    """Fit a leading actor latent slice to selected critic observation terms."""
+    """Fit a leading actor latent slice to selected critic observation terms.
+
+    Estimation index rule: the prediction is always ``latent[..., 0:target_dim]``.
+    """
 
     target_obs_group_name: str = "critic"
     target_obs_term_names: Sequence[str] = ("base_lin_vel",)

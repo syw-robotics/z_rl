@@ -161,6 +161,16 @@ With `top_k` set, only the selected experts run per sample; `None` keeps dense r
 
 Pretrained experts load into `head.experts` only, never the gate. Use `pretrained_expert_path` **or** `pretrained_expert_specs`. Checkpoints may be a raw `state_dict` or wrapped under `actor_state_dict` / `state_dict`. MoE keys (`head.experts.weights.0`) and MLP heads (`head.0.weight`) are both accepted; MLP weights are transposed into the stacked `[E, in, out]` layout.
 
+## Checkpoints
+
+Training still writes one flat `actor_state_dict` / `critic_state_dict` (distillation: `student_state_dict` / `teacher_state_dict`). The same save also writes `{role}_modules`, one state dict per direct child: `latent_adapter`, `head`, and `rnn` or `distribution` when that child exists. Names inside a child dict are relative (`encoders.proprio.0.weight`, `0.weight`). `MLPModel.module_state_dicts` / `load_module_state_dict` own that split. Packing those entries into a checkpoint, and reading an older flat state dict, lives in `z_rl.utils.checkpoint`.
+
+Distillation `load_cfg["student_modules"]` copies selected children onto the student after an optional full student load. Values are checkpoint roles (`actor`, `teacher`, `student`):
+
+```python
+load_cfg = {"teacher": True, "student_modules": {"latent_adapter": "actor", "head": "actor"}}
+```
+
 ## Specs
 
 ```python

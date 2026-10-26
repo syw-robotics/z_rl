@@ -607,5 +607,10 @@ class ZRlOnPolicyRunnerCfg(ZRlBaseRunnerCfg):
     algorithm: ZRlPpoAlgorithmCfg = MISSING
     """The algorithm configuration."""
 
-    check_nan: bool = False
-    """Whether to check for NaN values during training. Defaults to False."""
+    torch_compile_mode: str | None = None
+    """Optional torch.compile mode for the actor and critic networks.
+
+    ``None`` (default) disables compilation. Supported values are ``"default"`` and
+    ``"max-autotune-no-cudagraphs"``. The CUDA-graph modes (``"reduce-overhead"`` and
+    ``"max-autotune"``) are not compatible with the multi-model PPO forward pattern.
+    """

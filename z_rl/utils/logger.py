@@ -119,19 +119,22 @@ class Logger:
             self.cur_reward_sum += rewards
             self.cur_episode_length += 1
 
-            # Clear data for completed episodes
-            new_ids = (dones > 0).nonzero(as_tuple=False)
-            self.rewbuffer.extend(self.cur_reward_sum[new_ids][:, 0].cpu().numpy().tolist())
-            self.lenbuffer.extend(self.cur_episode_length[new_ids][:, 0].cpu().numpy().tolist())
-            self.cur_reward_sum[new_ids] = 0
-            self.cur_episode_length[new_ids] = 0
+            # Clear data for completed episodes — use a boolean mask to avoid the
+            # CPU sync from (dones > 0).nonzero() on every step.
+            done_mask = dones.squeeze(-1) > 0
+            if torch.any(done_mask):
+                self.rewbuffer.extend(self.cur_reward_sum[done_mask].cpu().numpy().tolist())
+                self.lenbuffer.extend(self.cur_episode_length[done_mask].cpu().numpy().tolist())
+                self.cur_reward_sum[done_mask] = 0
+                self.cur_episode_length[done_mask] = 0
 
-            # Deferred env logs reuse new_ids instead of synchronizing once in the adaptor.
+            # Deferred env logs reuse done_mask instead of synchronizing once in the adaptor.
             ep_info = extras.get("episode", extras.get("log"))
             log_on_done = bool(extras.get("log_on_done"))
-            if ep_info is not None and (not log_on_done or new_ids.numel() > 0):
+            any_done = done_mask.any()
+            if ep_info is not None and (not log_on_done or any_done):
                 if log_on_done:
-                    env_ids = new_ids[:, 0]
+                    env_ids = done_mask.nonzero(as_tuple=False)[:, 0]
                     scales = extras.get("log_scale", {})
                     ep_info = {
                         key: value.index_select(0, env_ids.to(value.device)).detach().reshape(-1) * scales.get(key, 1.0)

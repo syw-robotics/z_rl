@@ -47,7 +47,11 @@ class ObsLatentAdapter(nn.Module):
         self.append_obs = append_obs
 
     def forward(self, obs: TensorDict) -> torch.Tensor:
-        x = torch.cat([obs[g] for g in self.obs_groups], dim=-1)
+        # Avoid torch.cat overhead when only one observation group is present.
+        if len(self.obs_groups) == 1:
+            x = obs[self.obs_groups[0]]
+        else:
+            x = torch.cat([obs[g] for g in self.obs_groups], dim=-1)
         return self.encode_concat(x)
 
     def encode_concat(self, x: torch.Tensor) -> torch.Tensor:
@@ -60,7 +64,12 @@ class ObsLatentAdapter(nn.Module):
     def update_normalization(self, obs: TensorDict) -> None:
         if self._obs_normalizer_update is None:
             return
-        self._obs_normalizer_update(torch.cat([obs[group] for group in self.obs_groups], dim=-1))
+        # Avoid torch.cat overhead when only one observation group is present.
+        if len(self.obs_groups) == 1:
+            x = obs[self.obs_groups[0]]
+        else:
+            x = torch.cat([obs[group] for group in self.obs_groups], dim=-1)
+        self._obs_normalizer_update(x)
 
     def as_export_module(self) -> nn.Module:
         return _ObsLatentAdapterExport(self)

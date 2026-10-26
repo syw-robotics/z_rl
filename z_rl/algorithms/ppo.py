@@ -186,7 +186,8 @@ class PPO:
         critic_hidden_state = self.critic.get_hidden_state()
         last_values = self.critic(obs).detach()
         self.critic.reset(hidden_state=critic_hidden_state)
-        # Compute returns and advantages
+
+        # GAE: iterate backwards over timesteps.
         advantage = 0
         for step in reversed(range(st.num_transitions_per_env)):
             # If we are at the last step, bootstrap the return value
@@ -199,6 +200,7 @@ class PPO:
             advantage = delta + next_is_not_terminal * self.gamma * self.lam * advantage
             # Return: R_t = A(s_t, a_t) + V(s_t)
             st.returns[step] = advantage + st.values[step]
+
         # Compute the advantages
         st.advantages = st.returns - st.values
         # Normalize the advantages if per minibatch normalization is not used
@@ -381,9 +383,10 @@ class PPO:
         if self.is_multi_gpu:
             self.reduce_parameters()
 
-        # Apply the gradients for PPO
-        nn.utils.clip_grad_norm_(self.actor.parameters(), self.max_grad_norm)
-        nn.utils.clip_grad_norm_(self.critic.parameters(), self.max_grad_norm)
+        # Apply the gradients for PPO — clip actor+critic jointly in one call
+        nn.utils.clip_grad_norm_(
+            list(self.actor.parameters()) + list(self.critic.parameters()), self.max_grad_norm
+        )
         self.optimizer.step()
 
     def train_mode(self) -> None:

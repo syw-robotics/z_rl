@@ -43,6 +43,23 @@ def test_optimizer_group_steps_all_wrapped_optimizers() -> None:
     assert len(group.state_dict()["optimizers"]) == 2
 
 
+def test_optimizer_group_updates_learning_rates_after_loading_state() -> None:
+    first = nn.Parameter(torch.ones(1))
+    second = nn.Parameter(torch.ones(1))
+    group = OptimizerGroup([
+        torch.optim.SGD([first], lr=0.1),
+        torch.optim.SGD([second], lr=0.2),
+    ])
+    group.load_state_dict(group.state_dict())
+    group.param_groups[0]["lr"] = 0.01
+    group.param_groups[1]["lr"] = 0.02
+    first.grad = torch.ones_like(first)
+    second.grad = torch.ones_like(second)
+    group.step()
+    torch.testing.assert_close(first, torch.tensor([0.99]))
+    torch.testing.assert_close(second, torch.tensor([0.98]))
+
+
 def test_muon_adamw_wrapper_splits_parameters() -> None:
     if not hasattr(torch.optim, "Muon"):
         return

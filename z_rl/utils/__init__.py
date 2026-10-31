@@ -5,7 +5,7 @@
 
 """Helper functions."""
 
-from .log_writers import LogWriter, NeptuneLogWriter, SwanLabLogWriter, WandbLogWriter
+from .log_writers import CometLogWriter, LogWriter, NeptuneLogWriter, SwanLabLogWriter, WandbLogWriter
 from .utils import (
     ObsSelector,
     resolve_obs_temporal_selector,
@@ -29,6 +29,7 @@ from .utils import (
 
 
 __all__ = [
+    "CometLogWriter",
     "LogWriter",
     "NeptuneLogWriter",
     "SwanLabLogWriter",

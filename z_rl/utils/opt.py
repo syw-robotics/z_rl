@@ -75,6 +75,8 @@ class OptimizerGroup(torch.optim.Optimizer):
             )
         for opt, opt_state in zip(self.optimizers, opt_states):
             opt.load_state_dict(opt_state)
+        # Loading replaces the wrapped optimizers' parameter-group dictionaries.
+        self.param_groups = [group for opt in self.optimizers for group in opt.param_groups]
 
 
 class MuonAdamWWrapper(OptimizerGroup):

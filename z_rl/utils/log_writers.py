@@ -56,6 +56,12 @@ except ModuleNotFoundError:
     neptune = None
 
 
+try:
+    import comet_ml
+except ModuleNotFoundError:
+    comet_ml = None
+
+
 class _RemoteLogWriter(LogWriter):
     """TensorBoard plus one remote run with shared config, scalar, and file upload."""
 
@@ -237,6 +243,45 @@ class SwanLabLogWriter(_RemoteLogWriter):
             swanlab.log({"video": swanlab.Video(str(video), caption=video.name)}, step=it)
         else:
             swanlab.save(str(video), base_path=str(video.parent), policy="now")
+
+
+class CometLogWriter(_RemoteLogWriter):
+    """Summary writer for Comet, configured through COMET_* environment variables."""
+
+    service_name = "Comet"
+    project_cfg_key = "comet_project"
+
+    def _client(self):
+        return comet_ml
+
+    def _missing_package_message(self) -> str:
+        return "comet-ml is required to log to Comet. Install it with: pip install comet-ml"
+
+    def _init_run(self, log_dir: str, project: str, run_name: str) -> None:
+        self.run = comet_ml.Experiment(
+            project_name=project,
+            auto_metric_logging=False,
+            auto_param_logging=False,
+            auto_output_logging=False,
+            log_code=False,
+        )
+        self.run.set_name(run_name)
+        self.run.log_other("log_dir", log_dir)
+
+    def _update_config(self, values: dict) -> None:
+        self.run.log_parameters(values)
+
+    def _log_scalar(self, tag: str, scalar_value: float, global_step: int | None) -> None:
+        self.run.log_metric(tag, float(scalar_value), step=global_step)
+
+    def _finish(self) -> None:
+        self.run.end()
+
+    def _upload(self, path: str) -> None:
+        self.run.log_asset(path)
+
+    def _upload_video(self, video: pathlib.Path, it: int) -> None:
+        self.run.log_video(str(video), step=it)
 
 
 class NeptuneLogWriter(LogWriter):

@@ -21,13 +21,14 @@ from z_rl.utils.utils import resolve_callable, resolve_class
 
 # Plain-string logger names kept for old configs. Dict configs pass class_name directly.
 _LOGGER_ALIASES = {
+    "trackio": ("TrackioLogWriter", "trackio_project"),
     "comet": ("CometLogWriter", "comet_project"),
     "neptune": ("NeptuneLogWriter", "neptune_project"),
     "wandb": ("WandbLogWriter", "wandb_project"),
     "swanlab": ("SwanLabLogWriter", "swanlab_project"),
 }
 # These writers use one step axis, so wall-clock series are omitted.
-_ITERATION_STEP_LOGGERS = {"WandbLogWriter", "SwanLabLogWriter", "CometLogWriter"}
+_ITERATION_STEP_LOGGERS = {"WandbLogWriter", "SwanLabLogWriter", "CometLogWriter", "TrackioLogWriter"}
 
 
 class Logger:

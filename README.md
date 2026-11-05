@@ -59,6 +59,50 @@ For detailed module guides, see:
 - [Algorithms README](z_rl/algorithms/README.md)
 - [Models README](z_rl/models/README.md)
 
+## Logging
+
+**TensorBoard** is the default logger and is included in the base installation.
+**W&B**, **SwanLab**, **Comet**, **Neptune**, and **Trackio** are optional backends; install the package for the backend you select.
+All optional backends also retain local TensorBoard logs.
+
+<details>
+<summary>Logger installation and configuration</summary>
+
+| Backend | Install | Writer class | String config / project key |
+| --- | --- | --- | --- |
+| W&B | `pip install wandb` | `WandbLogWriter` | `wandb` / `wandb_project` |
+| SwanLab | `pip install swanlab` | `SwanLabLogWriter` | `swanlab` / `swanlab_project` |
+| Comet | `pip install comet-ml` | `CometLogWriter` | `comet` / `comet_project` |
+| Neptune (legacy API) | `pip install 'neptune<2'` | `NeptuneLogWriter` | `neptune` / `neptune_project` |
+| Trackio | `pip install trackio` | `TrackioLogWriter` | `trackio` / `trackio_project` |
+
+
+Set the runner's `logger` config to a writer dictionary, for example:
+
+```python
+logger = {"class_name": "WandbLogWriter", "project_name": "my-project"}
+```
+
+Replace the writer class to select another backend. The legacy string form (for example, `logger = "wandb"`)
+uses the corresponding project key in the table; IsaacLab configs default these project names to `"isaaclab"`.
+For TensorBoard, use `logger = "tensorboard"`.
+
+**W&B** writer reads the optional `WANDB_USERNAME` entity;
+
+**SwanLab** reads `SWANLAB_WORKSPACE`.
+
+**Comet** uses `COMET_*` environment variables.
+
+**Neptune** writer requires `NEPTUNE_API_TOKEN` and `NEPTUNE_USERNAME`.
+
+**Trackio** is imported only when selected; its automatic GPU and CPU monitoring are disabled.
+
+By default **Trackio** stores runs locally. View them with `trackio show --project my-project`.
+For remote logging, set `TRACKIO_SPACE_ID=owner/space` and authenticate with Hugging Face,
+or set `TRACKIO_SERVER_URL` for a self-hosted server. See the [Trackio documentation](https://huggingface.co/docs/trackio).
+
+</details>
+
 ## 🛠️ CLI Tools
 
 After installing Z-RL, the following command line tools are available:

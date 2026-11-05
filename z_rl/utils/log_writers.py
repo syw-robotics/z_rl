@@ -284,6 +284,52 @@ class CometLogWriter(_RemoteLogWriter):
         self.run.log_video(str(video), step=it)
 
 
+class TrackioLogWriter(_RemoteLogWriter):
+    """TensorBoard and Trackio, configured through TRACKIO_* environment variables."""
+
+    service_name = "Trackio"
+    project_cfg_key = "trackio_project"
+
+    def _client(self):
+        # Import only when selected: Trackio also loads its dashboard dependencies.
+        try:
+            import trackio
+        except ModuleNotFoundError:
+            return None
+        self.trackio = trackio
+        return trackio
+
+    def _missing_package_message(self) -> str:
+        return "trackio is required to log to Trackio. Install it with: pip install trackio"
+
+    def _init_run(self, log_dir: str, project: str, run_name: str) -> None:
+        self.run = self.trackio.init(
+            project=project,
+            name=run_name,
+            config={"log_dir": log_dir},
+            auto_log_gpu=False,
+            auto_log_cpu=False,
+        )
+
+    def store_config(self, env_cfg: dict | object, train_cfg: dict) -> None:
+        """Store configuration before the first metric is logged."""
+        if not isinstance(env_cfg, dict):
+            env_cfg = env_cfg.to_dict() if hasattr(env_cfg, "to_dict") else asdict(env_cfg)
+        self.run.config.update({"train_cfg": train_cfg, "env_cfg": env_cfg})
+
+    def _log_scalar(self, tag: str, scalar_value: float, global_step: int | None) -> None:
+        self.run.log({tag: float(scalar_value)}, step=global_step)
+
+    def _finish(self) -> None:
+        self.run.finish()
+
+    def _upload(self, path: str) -> None:
+        self.run.log_artifact(path)
+
+    def _upload_video(self, video: pathlib.Path, it: int) -> None:
+        self.run.log({"video": self.trackio.Video(str(video))}, step=it)
+
+
 class NeptuneLogWriter(LogWriter):
     """Summary writer for Neptune."""
 

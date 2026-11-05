@@ -21,13 +21,14 @@ from z_rl.utils.utils import resolve_callable, resolve_class
 
 # Plain-string logger names kept for old configs. Dict configs pass class_name directly.
 _LOGGER_ALIASES = {
+    "trackio": ("TrackioLogWriter", "trackio_project"),
     "comet": ("CometLogWriter", "comet_project"),
     "neptune": ("NeptuneLogWriter", "neptune_project"),
     "wandb": ("WandbLogWriter", "wandb_project"),
     "swanlab": ("SwanLabLogWriter", "swanlab_project"),
 }
 # These writers use one step axis, so wall-clock series are omitted.
-_ITERATION_STEP_LOGGERS = {"WandbLogWriter", "SwanLabLogWriter", "CometLogWriter"}
+_ITERATION_STEP_LOGGERS = {"WandbLogWriter", "SwanLabLogWriter", "CometLogWriter", "TrackioLogWriter"}
 
 
 class Logger:
@@ -156,13 +157,15 @@ class Logger:
         print_minimal: bool = False,
         width: int = 80,
         pad: int = 40,
+        collection_size: int | None = None,
     ) -> None:
         """Log the training metrics to the logging service and print them to the console.
 
         If videos are available, they are uploaded to the logging service as well.
         """
         if self.writer is not None:
-            collection_size = self.cfg["num_steps_per_env"] * self.num_envs * self.gpu_world_size
+            if collection_size is None:
+                collection_size = self.cfg["num_steps_per_env"] * self.num_envs * self.gpu_world_size
             iteration_time = collect_time + learn_time
             self.tot_timesteps += collection_size
             self.tot_time += iteration_time

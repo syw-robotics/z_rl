@@ -560,7 +560,7 @@ class ZRlBaseRunnerCfg:
     ``{time-stamp}_{run_name}``.
     """
 
-    logger: Literal["tensorboard", "neptune", "wandb", "swanlab", "comet"] | dict = "tensorboard"
+    logger: Literal["tensorboard", "neptune", "wandb", "swanlab", "comet", "trackio"] | dict = "tensorboard"
     """The logger to use. Defaults to tensorboard. Dict configs may specify a custom LogWriter."""
 
     neptune_project: str = "isaaclab"
@@ -574,6 +574,9 @@ class ZRlBaseRunnerCfg:
 
     comet_project: str = "isaaclab"
     """The Comet project name. Defaults to "isaaclab"."""
+
+    trackio_project: str = "isaaclab"
+    """The Trackio project name. Defaults to "isaaclab"."""
 
     resume: bool = False
     """Whether to resume a previous training. Defaults to False.

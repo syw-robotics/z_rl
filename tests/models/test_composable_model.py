@@ -36,7 +36,7 @@ class _LatentSpec(LatentSpec):
     def validate(self, model: nn.Module) -> None:
         self.validated_model = model
 
-    def build_latent_adapter(self, model: nn.Module) -> nn.Module:
+    def build(self, model: nn.Module) -> nn.Module:
         return _ProjectLatent(model.obs_groups, model.input_dim, self.latent_dim)
 
     def get_latent_dim(self, model: nn.Module) -> int:
@@ -53,7 +53,7 @@ class _HeadSpec(HeadSpec):
     def validate(self, model: nn.Module) -> None:
         self.validated_model = model
 
-    def build_head(self, model: nn.Module, input_dim: int, output_dim: int, activation: str) -> nn.Module:
+    def build(self, model: nn.Module, input_dim: int, output_dim: int, activation: str) -> nn.Module:
         del model, activation
         self.last_input_dim = input_dim
         self.last_output_dim = output_dim
@@ -99,4 +99,21 @@ class TestComposableModel:
         assert head_spec.validated_model is model
         assert head_spec.last_input_dim == 6
         assert head_spec.last_output_dim == 3
+        assert output.shape == (4, 3)
+
+    def test_head_spec_can_be_resolved_from_config_dict(self) -> None:
+        obs = make_obs(num_envs=4, obs_dim=8)
+
+        model = ComposableModel(
+            obs,
+            OBS_GROUPS,
+            "actor",
+            3,
+            hidden_dims=[16],
+            head_spec={"class_name": "MoEHeadSpec", "num_experts": 2, "expert_hidden_dims": [8]},
+        )
+
+        output = model(obs)
+
+        assert model.head.num_experts == 2
         assert output.shape == (4, 3)

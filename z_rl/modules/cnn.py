@@ -155,10 +155,18 @@ class CNN(nn.Sequential):
                 torch.nn.init.zeros_(module.bias)  # type: ignore
 
     def forward(self, x: torch.Tensor) -> torch.Tensor:
-        """Forward pass of the CNN."""
+        """Forward pass of the CNN.
+
+        Accepts ``(N, C, H, W)`` or extra leading dims such as time-major ``(T, N, C, H, W)``
+        used by recurrent PPO updates. Leading dims are collapsed for ``Conv2d`` and restored.
+        """
+        if x.ndim < 4:
+            raise ValueError(f"CNN expects at least 4D input (..., C, H, W), got shape {tuple(x.shape)}.")
+        leading = x.shape[:-3]
+        x = x.reshape(-1, *x.shape[-3:])
         for layer in self:
             x = layer(x)
-        return x
+        return x.reshape(*leading, *x.shape[1:])
 
 
 def _compute_padding(input_hw: tuple[int, int], kernel: int, stride: int, dilation: int) -> tuple[int, int]:

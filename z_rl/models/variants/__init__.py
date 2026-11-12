@@ -1,7 +1,17 @@
 """Predefined model variants."""
 
-from .encoder_mlp_model import EncoderMLPModel
+from .cnn_model import CNNModel
+from .group_mlp_encoder_model import GroupMLPEncoderModel
+from .mlp_encoder_model import MLPEncoderModel
 from .moe_model import MoEModel
-from .vae_model import VAEModel
+from .rnn_model import RNNModel
+from .simba_model import SimBaModel
 
-__all__ = ["EncoderMLPModel", "MoEModel", "VAEModel"]
+__all__ = [
+    "CNNModel",
+    "MLPEncoderModel",
+    "GroupMLPEncoderModel",
+    "MoEModel",
+    "RNNModel",
+    "SimBaModel",
+]

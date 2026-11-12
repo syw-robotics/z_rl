@@ -210,3 +210,72 @@ class TestRNNModelONNXExport:
 
             assert [i.name for i in loaded.graph.input] == onnx_model.input_names
             assert [o.name for o in loaded.graph.output] == onnx_model.output_names
+
+
+CNN_CFG = {"output_channels": [4], "kernel_size": 3, "stride": 2}
+IMG_C, IMG_H, IMG_W = 1, 16, 16
+
+
+def _make_cnn_rnn_obs(num_envs: int = NUM_ENVS) -> TensorDict:
+    return TensorDict(
+        {
+            "policy": torch.randn(num_envs, OBS_DIM),
+            "image": torch.randn(num_envs, IMG_C, IMG_H, IMG_W),
+        },
+        batch_size=[num_envs],
+    )
+
+
+def _cnn_output_dim() -> int:
+    from z_rl.modules import CNN
+
+    cnn = CNN(input_dim=(IMG_H, IMG_W), input_channels=IMG_C, **CNN_CFG)
+    return int(cnn.output_dim)
+
+
+class TestCNNRNNComposition:
+    """CNN+RNN via ``CNNLatentSpec`` on the recurrent backbone."""
+
+    def test_adapter_width_feeds_rnn_head_uses_hidden_dim(self) -> None:
+        obs = _make_cnn_rnn_obs()
+        model = RNNModel(
+            obs,
+            {"actor": ["policy", "image"]},
+            "actor",
+            NUM_ACTIONS,
+            hidden_dims=[32],
+            rnn_type="gru",
+            rnn_hidden_dim=16,
+            rnn_num_layers=1,
+            latent_spec={"class_name": "CNNLatentSpec", "image_obs_group": "image", "cnn_cfg": CNN_CFG},
+        )
+        assert model.rnn.rnn.input_size == OBS_DIM + _cnn_output_dim()
+        assert model.latent_dim == 16
+        output = model(obs)
+        assert output.shape == (NUM_ENVS, NUM_ACTIONS)
+        assert model.get_hidden_state() is not None
+
+    def test_time_major_images_with_masks(self) -> None:
+        time_steps, num_traj = 5, NUM_ENVS
+        obs = TensorDict(
+            {
+                "policy": torch.randn(time_steps, num_traj, OBS_DIM),
+                "image": torch.randn(time_steps, num_traj, IMG_C, IMG_H, IMG_W),
+            },
+            batch_size=[time_steps, num_traj],
+        )
+        model = RNNModel(
+            _make_cnn_rnn_obs(),
+            {"actor": ["policy", "image"]},
+            "actor",
+            NUM_ACTIONS,
+            hidden_dims=[32],
+            rnn_type="gru",
+            rnn_hidden_dim=16,
+            rnn_num_layers=1,
+            latent_spec={"class_name": "CNNLatentSpec", "image_obs_group": "image", "cnn_cfg": CNN_CFG},
+        )
+        masks = torch.ones(time_steps, num_traj, dtype=torch.bool)
+        hidden = torch.zeros(1, num_traj, 16)
+        latent = model.get_latent(obs, masks=masks, hidden_state=hidden)
+        assert latent.shape == (time_steps, num_traj, 16)

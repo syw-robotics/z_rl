@@ -6,59 +6,58 @@
 
 from __future__ import annotations
 
-import torch
-from tensordict import TensorDict
+import inspect
+from typing import Any
 
-from z_rl.utils import ObsSelector
+import torch
+
+from z_rl.utils import bind_matching_fields, resolve_spec
 
 from ..mlp_model import MLPModel
 from .specs import HeadSpec, LatentSpec
 
+SpecRef = LatentSpec | HeadSpec | dict[str, Any] | str | type | None
+
+_RESERVED_MODEL_KWARGS = frozenset(inspect.signature(MLPModel.__init__).parameters) | {"latent_spec", "head_spec"}
+
 
 class ComposableModel(MLPModel):
-    """MLPModel variant that composes optional latent and head specs during base initialization."""
+    """MLPModel variant that composes optional latent and head specs during base initialization.
 
-    def __init__(
-        self,
-        obs: TensorDict,
-        obs_groups: dict[str, list[str]],
-        obs_set: str,
-        output_dim: int,
-        hidden_dims: tuple[int, ...] | list[int] = (256, 256, 256),
-        activation: str = "elu",
-        obs_normalization: bool = False,
-        distribution_cfg: dict | None = None,
-        obs_group_time_slice_map: dict[str, dict[str, ObsSelector]] | None = None,
-        latent_spec: LatentSpec | None = None,
-        head_spec: HeadSpec | None = None,
-    ) -> None:
-        """Initialize the base model with explicit latent/head composition."""
-        self.latent_spec = latent_spec
-        self.head_spec = head_spec
-        super().__init__(
-            obs=obs,
-            obs_groups=obs_groups,
-            obs_set=obs_set,
-            output_dim=output_dim,
-            hidden_dims=hidden_dims,
-            activation=activation,
-            obs_normalization=obs_normalization,
-            distribution_cfg=distribution_cfg,
-            obs_group_time_slice_map=obs_group_time_slice_map,
-        )
+    Named subclasses can set ``latent_spec_class`` / ``head_spec_class`` so ``class_name`` still
+    works without nested spec dicts. Leftover constructor kwargs that match spec init fields are
+    bound onto the specs; keys accepted by ``MLPModel`` stay on the model (for example ``activation``).
+    """
+
+    latent_spec_class: SpecRef = None
+    head_spec_class: SpecRef = None
+
+    def __init__(self, *args, latent_spec: SpecRef = None, head_spec: SpecRef = None, **kwargs) -> None:
+        """Resolve specs, bind leftover spec fields, then initialize the base model."""
+        # resolve the latent spec and head spec
+        if latent_spec is None:
+            latent_spec = type(self).latent_spec_class
+        if head_spec is None:
+            head_spec = type(self).head_spec_class
+        self.latent_spec = resolve_spec(latent_spec)
+        self.head_spec = resolve_spec(head_spec)
+        # bind the leftover spec fields
+        if self.latent_spec is not None:
+            bind_matching_fields(self.latent_spec, kwargs, exclude=_RESERVED_MODEL_KWARGS)
+        if self.head_spec is not None:
+            bind_matching_fields(self.head_spec, kwargs, exclude=_RESERVED_MODEL_KWARGS)
+        # initialize the base model
+        super().__init__(*args, **kwargs)
 
     def build_latent_adapter(self) -> torch.nn.Module:
         """Build the configured latent adapter or fall back to the base identity adapter."""
         if self.latent_spec is None:
             return super().build_latent_adapter()
+        # validate user specified safety checks
         self.latent_spec.validate(self)
-        return self.latent_spec.build_latent_adapter(self)
-
-    def get_latent_dim(self) -> int:
-        """Return the latent dimensionality after optional composition overrides."""
-        if self.latent_spec is None:
-            return super().get_latent_dim()
-        return self.latent_spec.get_latent_dim(self)
+        adapter = self.latent_spec.build(self)
+        self.latent_dim = self.latent_spec.get_latent_dim(self)
+        return adapter
 
     def build_head(
         self,
@@ -68,7 +67,9 @@ class ComposableModel(MLPModel):
         activation: str,
     ) -> torch.nn.Module:
         """Build the configured head or fall back to the default MLP head."""
-        if self.head_spec is not None:
-            self.head_spec.validate(self)
-            return self.head_spec.build_head(self, input_dim, output_dim, activation)
-        return super().build_head(input_dim, output_dim, hidden_dims, activation)
+        if self.head_spec is None:
+            return super().build_head(input_dim, output_dim, hidden_dims, activation)
+        # validate user specified safety checks
+        self.head_spec.validate(self)
+        # return the head module
+        return self.head_spec.build(self, input_dim, output_dim, activation)

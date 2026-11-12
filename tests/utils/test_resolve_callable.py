@@ -128,6 +128,7 @@ class TestResolveCallableSimpleName:
         """Should resolve optional logger writers without initializing external services."""
         assert resolve_callable("WandbLogWriter").__name__ == "WandbLogWriter"
         assert resolve_callable("NeptuneLogWriter").__name__ == "NeptuneLogWriter"
+        assert resolve_callable("SwanLabLogWriter").__name__ == "SwanLabLogWriter"
 
     def test_simple_name_unknown(self) -> None:
         """Should raise ValueError for unknown simple names."""
@@ -152,3 +153,64 @@ class TestResolveCallableErrors:
         """Should raise TypeError for list input."""
         with pytest.raises(TypeError, match="Expected callable or string"):
             resolve_callable(["PPO"])  # type: ignore
+
+
+class TestResolveClass:
+    """Tests for resolve_class config copying."""
+
+    def test_resolve_class_does_not_mutate_original_cfg(self) -> None:
+        """The original config should keep class_name after resolution."""
+        from z_rl.utils import resolve_class
+        from z_rl.algorithms import PPO
+
+        cfg = {"class_name": "PPO", "learning_rate": 1e-3, "nested": {"std_type": "scalar"}}
+        resolved, class_cfg = resolve_class(cfg)
+
+        assert resolved is PPO
+        assert "class_name" not in class_cfg
+        assert class_cfg["learning_rate"] == 1e-3
+        assert cfg["class_name"] == "PPO"
+        assert cfg["nested"]["std_type"] == "scalar"
+        class_cfg["nested"]["std_type"] = "log"
+        assert cfg["nested"]["std_type"] == "scalar"
+
+
+class TestResolveSpec:
+    """Tests for resolve_spec composition references."""
+
+    def test_none_returns_none(self) -> None:
+        from z_rl.utils import resolve_spec
+
+        assert resolve_spec(None) is None
+
+    def test_instance_returned_unchanged(self) -> None:
+        from z_rl.algorithms import MoERoutingLossSpec
+        from z_rl.utils import resolve_spec
+
+        spec = MoERoutingLossSpec(expert_balance_loss_coef=0.2)
+        assert resolve_spec(spec) is spec
+
+    def test_class_is_constructed(self) -> None:
+        from z_rl.algorithms import MoERoutingLossSpec
+        from z_rl.utils import resolve_spec
+
+        spec = resolve_spec(MoERoutingLossSpec)
+        assert isinstance(spec, MoERoutingLossSpec)
+        assert spec.expert_balance_loss_coef == 1.0e-4
+
+    def test_dict_uses_class_name(self) -> None:
+        from z_rl.algorithms import MoERoutingLossSpec
+        from z_rl.utils import resolve_spec
+
+        spec = resolve_spec({"class_name": "MoERoutingLossSpec", "gate_entropy_loss_coef": 0.5})
+        assert isinstance(spec, MoERoutingLossSpec)
+        assert spec.gate_entropy_loss_coef == 0.5
+
+    def test_simple_name_string(self) -> None:
+        from z_rl.models import MoEHeadSpec
+        from z_rl.utils import resolve_spec
+
+        spec = resolve_spec("MoEHeadSpec")
+        assert isinstance(spec, MoEHeadSpec)
+        assert spec.num_experts == 4
+

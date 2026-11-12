@@ -8,17 +8,58 @@
 from __future__ import annotations
 
 import torch
+from collections.abc import Iterator
 from tensordict import TensorDict
 
+from tests.conftest import make_obs
 from z_rl.algorithms.ppo import PPO
 from z_rl.models import MLPModel
 from z_rl.storage import RolloutStorage
-from tests.conftest import make_obs
 
 NUM_ENVS = 4
 NUM_STEPS = 8
 OBS_DIM = 8
 NUM_ACTIONS = 4
+
+
+class _PassthroughSymmetryEnv:
+    def compile_symmetry(self) -> None:
+        pass
+
+    def augment_symmetry(
+        self,
+        obs: TensorDict | None = None,
+        actions: torch.Tensor | None = None,
+    ) -> tuple[TensorDict | None, torch.Tensor | None]:
+        return obs, actions
+
+
+class _MetricTrackingSymmetry:
+    def __init__(self) -> None:
+        self.compute_calls = 0
+
+    def compute_metric(self, actor: object, minibatch: object, original_batch_size: int) -> torch.Tensor:
+        del actor, minibatch, original_batch_size
+        self.compute_calls += 1
+        return torch.tensor(float(self.compute_calls))
+
+
+class _StaticBatchStorage:
+    def __init__(self, batch: object, num_batches: int) -> None:
+        self.batch = batch
+        self.num_batches = num_batches
+        self.clear_calls = 0
+        # PPO.update() refreshes normalizers from stored rollouts after optimization.
+        self.observations = batch.observations.unsqueeze(0)
+        self.values = torch.zeros(1, batch.observations.batch_size[0], 1)
+        self.returns = torch.ones_like(self.values)
+
+    def mini_batch_generator(self, num_mini_batches: int, num_epochs: int) -> Iterator[object]:
+        assert num_mini_batches * num_epochs == self.num_batches
+        yield from (self.batch for _ in range(self.num_batches))
+
+    def clear(self) -> None:
+        self.clear_calls += 1
 
 
 def _make_actor(obs: TensorDict, obs_groups: dict, num_actions: int = 4, **kwargs: object) -> MLPModel:
@@ -63,6 +104,84 @@ def _build_ppo(**overrides: object) -> tuple[PPO, TensorDict]:
     defaults.update(overrides)
     ppo = PPO(actor, critic, storage, **defaults)
     return ppo, obs
+
+
+def _prepare_metric_only_update(ppo: PPO, obs: TensorDict) -> _StaticBatchStorage:
+    batch = type("Batch", (), {})()
+    batch.observations = obs
+    storage = _StaticBatchStorage(batch, ppo.num_learning_epochs * ppo.num_mini_batches)
+    ppo.storage = storage
+    ppo.compute_loss = lambda minibatch: ({"test_loss": torch.tensor(1.0)}, {})
+    ppo.gradient_step = lambda loss: None
+    return storage
+
+
+def test_symmetry_augmentation_is_the_authoritative_rollout_switch() -> None:
+    ppo, _ = _build_ppo(
+        symmetry_augmentation=True,
+        symmetry_cfg={"env": _PassthroughSymmetryEnv()},
+    )
+
+    assert ppo._use_symmetry_augmentation
+    assert ppo.symmetry._batch_is_augmented
+
+
+def test_muon_adamw_weight_decay_is_forwarded() -> None:
+    if not hasattr(torch.optim, "Muon"):
+        return
+    ppo, _ = _build_ppo(use_muon=True, muon_adamw_weight_decay=0.123)
+    adamw = next(optimizer for optimizer in ppo.optimizer.optimizers if isinstance(optimizer, torch.optim.AdamW))
+
+    assert adamw.defaults["weight_decay"] == 0.123
+
+
+class TestMirrorMetricScheduling:
+    """Tests for opt-in, low-frequency detached mirror diagnostics."""
+
+    def test_static_logging_conditions_are_resolved_during_initialization(self) -> None:
+        """PPO should retain an interval only for detached diagnostic logging."""
+        cases = ((False, False, None), (False, True, 3), (True, True, None))
+        for use_mirror_loss, log_mirror_loss, expected_interval in cases:
+            ppo, _ = _build_ppo(
+                symmetry_cfg={
+                    "env": _PassthroughSymmetryEnv(),
+                    "use_mirror_loss": use_mirror_loss,
+                    "log_mirror_loss": log_mirror_loss,
+                    "mirror_loss_log_interval": 3,
+                }
+            )
+            assert ppo._mirror_loss_log_interval == expected_interval
+
+    def test_disabled_metric_has_no_compute_calls(self) -> None:
+        """The default-disabled diagnostic should add no actor evaluations."""
+        ppo, obs = _build_ppo()
+        symmetry = _MetricTrackingSymmetry()
+        ppo.symmetry = symmetry
+        storage = _prepare_metric_only_update(ppo, obs)
+
+        losses = ppo.update()
+
+        assert symmetry.compute_calls == 0
+        assert "mirror_loss_detach" not in losses
+        assert storage.clear_calls == 1
+
+    def test_metric_runs_once_on_each_selected_update(self) -> None:
+        """An enabled diagnostic should run on one minibatch at the configured update interval."""
+        ppo, obs = _build_ppo()
+        symmetry = _MetricTrackingSymmetry()
+        ppo.symmetry = symmetry
+        ppo._mirror_loss_log_interval = 2
+        storage = _prepare_metric_only_update(ppo, obs)
+
+        first_losses = ppo.update()
+        second_losses = ppo.update()
+        third_losses = ppo.update()
+
+        assert symmetry.compute_calls == 2
+        assert torch.equal(first_losses["mirror_loss_detach"], torch.tensor(1.0))
+        assert "mirror_loss_detach" not in second_losses
+        assert torch.equal(third_losses["mirror_loss_detach"], torch.tensor(2.0))
+        assert storage.clear_calls == 3
 
 
 class TestGAEComputation:
@@ -185,7 +304,7 @@ class TestGAEComputation:
             t.actions = ppo.actor(obs, stochastic_output=True).detach()
             t.values = ppo.critic(obs).detach()
             t.actions_log_prob = ppo.actor.get_output_log_prob(t.actions).detach()
-            t.distribution_params = tuple(p.detach() for p in ppo.actor.output_distribution_params)
+            t.distribution_params = tuple(p.detach() for p in ppo.actor.distribution.params)
             t.rewards = torch.randn(NUM_ENVS)
             t.dones = torch.zeros(NUM_ENVS)
             ppo.storage.add_transition(t)
@@ -224,8 +343,35 @@ class TestTimeoutBootstrapping:
         stored_reward_env1 = ppo.storage.rewards[0, 1, 0].item()
         assert abs(stored_reward_env1 - 1.0) < 1e-5
 
+
 class TestPPOLosses:
     """Tests for PPO loss computation correctness."""
+
+    def test_update_reports_policy_and_value_diagnostics(self) -> None:
+        """Diagnostics should be finite even when KL scheduling is disabled."""
+        ppo, obs = _build_ppo(schedule="fixed")
+        for _ in range(NUM_STEPS):
+            ppo.act(obs)
+            ppo.process_env_step(obs, torch.randn(NUM_ENVS), torch.zeros(NUM_ENVS), {})
+        ppo.compute_returns(obs)
+
+        metrics = ppo.update()
+
+        for key in ("clip_fraction", "kl", "explained_variance"):
+            assert key in metrics
+            assert torch.isfinite(metrics[key])
+        assert 0.0 <= metrics["clip_fraction"] <= 1.0
+        assert metrics["kl"] >= 0.0
+
+    def test_explained_variance_uses_complete_rollout(self) -> None:
+        ppo, obs = _build_ppo()
+        storage = _prepare_metric_only_update(ppo, obs)
+        storage.values = torch.tensor([[[1.0], [2.0], [3.0], [4.0]]])
+        storage.returns = torch.tensor([[[1.0], [3.0], [5.0], [7.0]]])
+
+        metrics = ppo.update()
+
+        assert torch.allclose(metrics["explained_variance"], torch.tensor(0.75))
 
     def test_surrogate_loss_clipping(self) -> None:
         """When ratio deviates beyond clip_param, the clipped branch should dominate."""
@@ -317,3 +463,96 @@ class TestAdaptiveLearningRate:
             ppo.learning_rate = min(1e-2, ppo.learning_rate * 1.5)
 
         assert ppo.learning_rate == initial_lr
+
+
+class TestNormalizationUpdates:
+    """Tests for observation-normalization update timing."""
+
+    def test_normalization_uses_rollout_after_policy_update(self) -> None:
+        """Normalization statistics should stay fixed during a rollout and update from stored observations."""
+        obs = make_obs(NUM_ENVS, OBS_DIM)
+        obs_groups = {"actor": ["policy"], "critic": ["policy"]}
+        actor = _make_actor(obs, obs_groups, NUM_ACTIONS, obs_normalization=True)
+        critic = _make_critic(obs, obs_groups, obs_normalization=True)
+        storage = RolloutStorage("rl", NUM_ENVS, NUM_STEPS, obs, [NUM_ACTIONS])
+        ppo = PPO(actor, critic, storage, num_learning_epochs=1, num_mini_batches=1, schedule="fixed")
+
+        for step in range(NUM_STEPS):
+            rollout_obs = TensorDict(
+                {"policy": torch.full((NUM_ENVS, OBS_DIM), float(step + 1))}, batch_size=[NUM_ENVS]
+            )
+            next_obs = TensorDict({"policy": torch.full((NUM_ENVS, OBS_DIM), float(step + 2))}, batch_size=[NUM_ENVS])
+            ppo.act(rollout_obs)
+            ppo.process_env_step(next_obs, torch.ones(NUM_ENVS), torch.zeros(NUM_ENVS), {})
+
+        assert actor.latent_adapter.obs_normalizer.count == 0
+        assert critic.latent_adapter.obs_normalizer.count == 0
+
+        actor(storage.observations[0], stochastic_output=True)
+        current_log_prob = actor.get_output_log_prob(storage.actions[0])
+        ratio = torch.exp(current_log_prob - storage.actions_log_prob[0].squeeze(-1))
+        assert torch.allclose(ratio, torch.ones_like(ratio), atol=1e-6)
+
+        expected_mean = storage.observations["policy"].flatten(0, 1).mean(dim=0)
+        ppo.compute_returns(next_obs)
+        ppo.update()
+
+        expected_count = NUM_ENVS * NUM_STEPS
+        assert actor.latent_adapter.obs_normalizer.count == expected_count
+        assert critic.latent_adapter.obs_normalizer.count == expected_count
+        assert torch.allclose(actor.latent_adapter.obs_normalizer.mean, expected_mean)
+        assert torch.allclose(critic.latent_adapter.obs_normalizer.mean, expected_mean)
+
+
+class TestMixedPrecision:
+    """Tests for the use_mixed_precision flag."""
+
+    def test_flag_defaults_to_false(self) -> None:
+        """Mixed precision must be opt-in."""
+        ppo, _obs = _build_ppo()
+        assert ppo.use_mixed_precision is False
+
+    def test_update_runs_with_mixed_precision(self) -> None:
+        """update() with the flag on returns finite losses and changes parameters."""
+        ppo, obs = _build_ppo(use_mixed_precision=True, schedule="fixed")
+        ppo.train_mode()
+        for _ in range(NUM_STEPS):
+            ppo.act(obs)
+            ppo.process_env_step(obs, torch.randn(NUM_ENVS), torch.zeros(NUM_ENVS), {})
+        ppo.compute_returns(obs)
+
+        before = [p.clone() for p in ppo.actor.parameters()]
+        loss_dict = ppo.update()
+
+        assert all(torch.isfinite(torch.as_tensor(v)) for v in loss_dict.values())
+        after = list(ppo.actor.parameters())
+        assert any(not torch.equal(b, a) for b, a in zip(before, after)), "actor params should change"
+
+
+class TestLoadRestoresLearningRate:
+    """Tests for restoring the adaptive learning rate from the optimizer state."""
+
+    def test_load_copies_optimizer_lr_into_algorithm(self) -> None:
+        """Resume should keep the optimizer learning rate instead of the constructor default."""
+        ppo, _obs = _build_ppo(schedule="adaptive", learning_rate=1e-3)
+        resumed_lr = 2e-4
+        ppo.learning_rate = resumed_lr
+        for param_group in ppo.optimizer.param_groups:
+            param_group["lr"] = resumed_lr
+
+        restored, _obs = _build_ppo(schedule="adaptive", learning_rate=1e-3)
+        restored.load(ppo.save(), None, True)
+
+        assert restored.learning_rate == resumed_lr
+        assert restored.optimizer.param_groups[0]["lr"] == resumed_lr
+
+
+class TestModuleCheckpoint:
+    def test_save_keeps_flat_state_and_adds_child_modules(self) -> None:
+        ppo, _obs = _build_ppo()
+        saved = ppo.save()
+
+        assert "actor_state_dict" in saved
+        assert set(saved["actor_modules"]) >= {"latent_adapter", "head", "distribution"}
+        assert torch.equal(saved["actor_modules"]["head"]["0.weight"], saved["actor_state_dict"]["head.0.weight"])
+        assert set(saved["critic_modules"]) == {"latent_adapter", "head"}

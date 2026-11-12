@@ -40,6 +40,12 @@ class VAE(nn.Module):
         if latent_dim <= 0:
             raise ValueError(f"`latent_dim` must be positive, got {latent_dim}.")
         decoder_input_dim = latent_dim if decoder_input_dim is None else decoder_input_dim
+        if decoder_input_dim <= 0:
+            raise ValueError(f"`decoder_input_dim` must be positive, got {decoder_input_dim}.")
+        if decoder_input_dim > latent_dim:
+            raise ValueError(
+                f"`decoder_input_dim` can not exceed `latent_dim`, got {decoder_input_dim} > {latent_dim}."
+            )
         if decoder_output_dim is not None and decoder_output_dim <= 0:
             raise ValueError(f"`decoder_output_dim` must be positive, got {decoder_output_dim}.")
 
@@ -66,8 +72,8 @@ class VAE(nn.Module):
         return mu + eps * std
 
     def decode(self, z: torch.Tensor) -> torch.Tensor:
-        """Decode latent variable to reconstruction."""
-        return self.decoder(z)
+        """Decode the leading ``decoder_input_dim`` slice of the sampled latent."""
+        return self.decoder(z[..., : self.decoder_input_dim])
 
     def forward(self, x: torch.Tensor) -> torch.Tensor:
         """Run VAE forward pass.

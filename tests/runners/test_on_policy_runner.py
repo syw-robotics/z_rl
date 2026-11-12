@@ -54,7 +54,7 @@ def _make_train_cfg(model_type: str = "mlp") -> dict:
     """Return a minimal training configuration for PPO.
 
     Args:
-        model_type: One of ``"mlp"``, ``"rnn"``, or ``"cnn"``.
+        model_type: One of ``"mlp"``, ``"rnn"``, ``"cnn"``, or ``"cnn_rnn"``.
     """
     cfg: dict = {
         "num_steps_per_env": 8,
@@ -84,7 +84,7 @@ def _make_train_cfg(model_type: str = "mlp") -> dict:
             "rnn_hidden_dim": 16,
             "rnn_num_layers": 1,
         }
-    elif model_type == "cnn":
+    elif model_type in {"cnn", "cnn_rnn"}:
         cfg["obs_groups"] = {
             "actor": ["policy", "image"],
             "critic": ["policy", "image"],
@@ -94,21 +94,54 @@ def _make_train_cfg(model_type: str = "mlp") -> dict:
             "kernel_size": 3,
             "stride": 2,
         }
-        cfg["actor"] = {
-            "class_name": "CNNModel",
-            "hidden_dims": [32],
-            "activation": "elu",
-            "cnn_cfg": cnn_cfg,
-            "distribution_cfg": {
-                "class_name": "GaussianDistribution",
-            },
-        }
-        cfg["critic"] = {
-            "class_name": "CNNModel",
-            "hidden_dims": [32],
-            "activation": "elu",
-            "cnn_cfg": cnn_cfg,
-        }
+        if model_type == "cnn_rnn":
+            cfg["actor"] = {
+                "class_name": "RNNModel",
+                "hidden_dims": [32],
+                "activation": "elu",
+                "rnn_type": "gru",
+                "rnn_hidden_dim": 16,
+                "rnn_num_layers": 1,
+                "latent_spec": {
+                    "class_name": "CNNLatentSpec",
+                    "image_obs_group": "image",
+                    "cnn_cfg": cnn_cfg,
+                },
+                "distribution_cfg": {
+                    "class_name": "GaussianDistribution",
+                },
+            }
+            cfg["critic"] = {
+                "class_name": "RNNModel",
+                "hidden_dims": [32],
+                "activation": "elu",
+                "rnn_type": "gru",
+                "rnn_hidden_dim": 16,
+                "rnn_num_layers": 1,
+                "latent_spec": {
+                    "class_name": "CNNLatentSpec",
+                    "image_obs_group": "image",
+                    "cnn_cfg": cnn_cfg,
+                },
+            }
+        else:
+            cfg["actor"] = {
+                "class_name": "CNNModel",
+                "hidden_dims": [32],
+                "activation": "elu",
+                "image_obs_group": "image",
+                "cnn_cfg": cnn_cfg,
+                "distribution_cfg": {
+                    "class_name": "GaussianDistribution",
+                },
+            }
+            cfg["critic"] = {
+                "class_name": "CNNModel",
+                "hidden_dims": [32],
+                "activation": "elu",
+                "image_obs_group": "image",
+                "cnn_cfg": cnn_cfg,
+            }
     else:
         cfg["actor"] = {
             "class_name": "MLPModel",
@@ -128,7 +161,7 @@ def _make_train_cfg(model_type: str = "mlp") -> dict:
 
 def _build_runner(log_dir: str | None = None, model_type: str = "mlp") -> OnPolicyRunner:
     """Construct a runner with a DummyEnv and minimal config."""
-    env = DummyEnv(include_image=(model_type == "cnn"))
+    env = DummyEnv(include_image=(model_type in {"cnn", "cnn_rnn"}))
     cfg = _make_train_cfg(model_type)
     return OnPolicyRunner(env, cfg, log_dir=log_dir, device="cpu")
 
@@ -147,6 +180,14 @@ class TestRunnerConstruction:
         """Initial learning iteration should be zero."""
         runner = _build_runner()
         assert runner.current_learning_iteration == 0
+
+    def test_construct_keeps_class_names_on_original_cfg(self) -> None:
+        """Algorithm construction should not pop class_name from the runner config used for logging."""
+        runner = _build_runner()
+        assert runner.cfg["algorithm"]["class_name"] == "PPO"
+        assert runner.cfg["actor"]["class_name"] == "MLPModel"
+        assert runner.cfg["critic"]["class_name"] == "MLPModel"
+        assert runner.cfg["actor"]["distribution_cfg"]["class_name"] == "GaussianDistribution"
 
 
 class TestLearnLoop:
@@ -381,3 +422,28 @@ class TestCNNRunner:
 
             for key, param in runner.alg.actor.state_dict().items():
                 assert torch.equal(saved_actor[key], param), f"CNN parameter '{key}' not restored after load"
+
+
+class TestCNNRNNRunner:
+    """Tests that the full learn loop works with CNN+RNN actor/critic."""
+
+    def test_cnn_rnn_learn_runs_without_error(self) -> None:
+        """A short learn call with CNN+RNN models should complete without raising."""
+        runner = _build_runner(model_type="cnn_rnn")
+        runner.learn(num_learning_iterations=2)
+
+    def test_cnn_rnn_learn_updates_parameters(self) -> None:
+        """CNN+RNN actor parameters should change after learning."""
+        runner = _build_runner(model_type="cnn_rnn")
+        params_before = {n: p.clone() for n, p in runner.alg.actor.named_parameters()}
+        runner.learn(num_learning_iterations=2)
+        changed = any(not torch.equal(params_before[n], p) for n, p in runner.alg.actor.named_parameters())
+        assert changed, "CNN+RNN actor parameters should have changed after learning"
+
+    def test_cnn_rnn_inference_produces_actions(self) -> None:
+        """Inference policy from a CNN+RNN runner should return correct action shape."""
+        runner = _build_runner(model_type="cnn_rnn")
+        policy = runner.get_inference_policy()
+        obs = runner.env.get_observations()
+        actions = policy(obs)
+        assert actions.shape == (NUM_ENVS, NUM_ACTIONS)

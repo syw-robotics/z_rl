@@ -3,11 +3,12 @@
 #
 # SPDX-License-Identifier: BSD-3-Clause
 
-import gymnasium as gym
 import torch
 from tensordict import TensorDict
 
+import gymnasium as gym
 from isaaclab.envs import ManagerBasedRLEnv
+
 from z_rl.env import VecEnv
 from z_rl.utils import ObsSelector
 
@@ -77,9 +78,12 @@ class ZRlVecEnvWrapper(VecEnv):
         self._obs_group_layout_mode_map = self._create_obs_group_layout_mode_map()
         self._obs_group_term_order_map = self._create_obs_group_term_order_map()
         self._obs_group_concatenate_dim_map = self._create_obs_group_concatenate_dim_map()
-        self._dict_obs_group_names = self._create_dict_obs_group_names()  # check for dict obs (when concatenate_terms is False)
+        self._dict_obs_group_names = (
+            self._create_dict_obs_group_names()
+        )  # check for dict obs (when concatenate_terms is False)
         self._history_major_group_history_length_map = self._create_history_major_group_history_length_map()
         self._obs_group_time_slice_map = self._create_obs_group_time_slice_map()
+        self._symmetry_compiler = None
 
         # reset at the start since the Z-RL runner does not call reset
         self.env.reset()
@@ -207,6 +211,22 @@ class ZRlVecEnvWrapper(VecEnv):
             extras["time_outs"] = truncated
         # return the step information
         return TensorDict(self._process_obs_groups(obs_dict), batch_size=[self.num_envs]), rew, dones, extras
+
+    def compile_symmetry(self) -> None:
+        """Compile declared observation/action symmetry once for training."""
+        if self._symmetry_compiler is None:
+            from .symmetry import IsaacLabSymmetryCompiler
+
+            self._symmetry_compiler = IsaacLabSymmetryCompiler(self)
+
+    def augment_symmetry(
+        self,
+        obs: TensorDict | None = None,
+        actions: torch.Tensor | None = None,
+    ) -> tuple[TensorDict | None, torch.Tensor | None]:
+        """Append mirrored observations/actions using the cached compiler."""
+        self.compile_symmetry()
+        return self._symmetry_compiler.augment(obs=obs, actions=actions)
 
     def close(self):  # noqa: D102
         return self.env.close()

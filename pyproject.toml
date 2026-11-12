@@ -4,7 +4,7 @@ build-backend = "setuptools.build_meta"
 
 [project]
 name = "z_rl"
-version = "0.0.3"
+version = "0.2.0"
 keywords = ["reinforcement-learning", "robotics"]
 maintainers = [
   { name="Siyuan Wang", email="syw@mail.sustech.edu.cn" },
@@ -34,6 +34,13 @@ dependencies = [
     "onnx",
     "onnxscript>=0.5.4",
     "gradio"
+]
+
+[project.optional-dependencies]
+# trackio = ["trackio"]
+# comet = ["comet-ml"]
+muon = [
+    "torch>=2.9",
 ]
 
 [project.urls]

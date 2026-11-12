@@ -18,5 +18,6 @@ The following example shows how to wrap an environment for Z-RL:
 from .distillation_cfg import *
 from .exporter import export_policy_as_onnx
 from .rl_cfg import *
+from .symmetry import IsaacLabSymmetryCompiler
 from .symmetry_cfg import ZRlSymmetryCfg
 from .vecenv_wrapper import ZRlVecEnvWrapper

@@ -11,6 +11,10 @@ def test_create_plugin_template_pins_current_zrl_version(tmp_path) -> None:
 
     pyproject_content = (root / "pyproject.toml").read_text(encoding="utf-8")
     assert f'dependencies = ["z_rl=={zrl_version}"]' in pyproject_content
+    assert (root / "z_rl_plugin_example" / "algorithms" / "my_loss.py").is_file()
+    rl_cfg = (root / "z_rl_plugin_example" / "rl_cfg.py").read_text(encoding="utf-8")
+    assert "ZRlComposablePpoAlgorithmCfg" in rl_cfg
+    assert "MyAuxLossSpec" in rl_cfg
 
 
 def test_pyproject_exposes_checkpoint_key_editor_cli() -> None:

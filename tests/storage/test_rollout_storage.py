@@ -248,6 +248,35 @@ class TestRecurrentMiniBatchGenerator:
         assert h1 is not None
         assert torch.allclose(h1, torch.zeros_like(h1)), "Envs without dones should all have step-0 hidden states"
 
+    def test_lstm_hidden_states_are_returned_as_tuple(self) -> None:
+        """LSTM hidden/cell states should be yielded as a tuple, not a list."""
+        storage, obs = _make_storage_and_obs()
+        rnn_hidden_dim = 8
+
+        for step in range(NUM_STEPS):
+            t = RolloutStorage.Transition()
+            t.observations = obs
+            hidden = torch.full((1, NUM_ENVS, rnn_hidden_dim), float(step))
+            cell = torch.full((1, NUM_ENVS, rnn_hidden_dim), float(step) + 0.5)
+            t.hidden_states = ((hidden, cell), None)
+            t.actions = torch.randn(NUM_ENVS, NUM_ACTIONS)
+            t.values = torch.randn(NUM_ENVS, 1)
+            t.actions_log_prob = torch.randn(NUM_ENVS)
+            t.distribution_params = (torch.randn(NUM_ENVS, NUM_ACTIONS), torch.ones(NUM_ENVS, NUM_ACTIONS))
+            t.rewards = torch.randn(NUM_ENVS)
+            t.dones = torch.zeros(NUM_ENVS)
+            storage.add_transition(t)
+
+        storage.returns = torch.randn_like(storage.returns)
+        storage.advantages = torch.randn_like(storage.advantages)
+
+        batch = next(storage.recurrent_mini_batch_generator(1, num_epochs=1))
+        hidden_state = batch.hidden_states[0]
+        assert isinstance(hidden_state, tuple)
+        assert len(hidden_state) == 2
+        assert hidden_state[0].shape[-1] == rnn_hidden_dim
+        assert hidden_state[1].shape[-1] == rnn_hidden_dim
+
 
 class TestDistillationStorage:
     """Tests for distillation-mode storage."""

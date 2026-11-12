@@ -8,12 +8,15 @@ from z_rl.storage import RolloutStorage
 
 
 class PPOLossSpec(abc.ABC):
-    """Abstract base class for extending PPO with additional optimization or logging terms."""
+    """Abstract base class for extending PPO with additional optimization or logging terms.
 
-    @abc.abstractmethod
+    Required override: ``compute``. ``validate`` is a no-op by default. Spec fields named ``<loss_key>_coef``
+    are copied onto the algorithm so ``PPO.update()`` can weight the corresponding loss.
+    """
+
     def validate(self, algo: object) -> None:
         """Validate spec-specific assumptions against the initialized algorithm."""
-        raise NotImplementedError
+        del algo
 
     @abc.abstractmethod
     def compute(

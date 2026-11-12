@@ -8,6 +8,8 @@ import os
 
 import torch
 
+from z_rl.utils.onnx_export import export_to_onnx
+
 
 def export_policy_as_onnx(
     policy: object, path: str, normalizer: object | None = None, filename="policy.onnx", verbose=False
@@ -91,7 +93,7 @@ class _OnnxPolicyExporter(torch.nn.Module):
 
             if self.rnn_type == "lstm":
                 c_in = torch.zeros(self.rnn.num_layers, 1, self.rnn.hidden_size)
-                torch.onnx.export(
+                export_to_onnx(
                     self,
                     (obs, h_in, c_in),
                     os.path.join(path, filename),
@@ -103,7 +105,7 @@ class _OnnxPolicyExporter(torch.nn.Module):
                     dynamic_axes={},
                 )
             elif self.rnn_type == "gru":
-                torch.onnx.export(
+                export_to_onnx(
                     self,
                     (obs, h_in),
                     os.path.join(path, filename),
@@ -118,7 +120,7 @@ class _OnnxPolicyExporter(torch.nn.Module):
                 raise NotImplementedError(f"Unsupported RNN type: {self.rnn_type}")
         else:
             obs = torch.zeros(1, self.actor[0].in_features)
-            torch.onnx.export(
+            export_to_onnx(
                 self,
                 obs,
                 os.path.join(path, filename),

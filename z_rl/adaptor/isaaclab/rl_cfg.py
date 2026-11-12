@@ -23,6 +23,23 @@ from .symmetry_cfg import ZRlSymmetryCfg
 
 
 @configclass
+class ZRlEmpiricalNormalizationCfg:
+    """Advanced observation-normalization settings."""
+
+    decay: float = 1.0
+    """Running-moment decay in (0, 1]. A value of 1.0 uses cumulative statistics."""
+
+    stats_shape: tuple[int, ...] | list[int] | None = None
+    """Optional broadcastable statistics shape. Defaults to the flattened observation shape."""
+
+    eps: float = 1.0e-2
+    """Numerical-stability offset applied to the running standard deviation."""
+
+    until: int | None = None
+    """Optional sample count after which running statistics stop updating."""
+
+
+@configclass
 class ZRlMLPModelCfg:
     """Configuration for the MLP model."""
 
@@ -35,8 +52,11 @@ class ZRlMLPModelCfg:
     activation: str = MISSING
     """The activation function for the MLP network."""
 
-    obs_normalization: bool = False
-    """Whether to normalize the observation for the model. Defaults to False."""
+    layer_norm: Literal["pre_activation", "post_activation"] | None = None
+    """LayerNorm position in each hidden layer of the default MLP head. None disables it."""
+
+    obs_normalization: bool | ZRlEmpiricalNormalizationCfg = False
+    """Observation normalization switch or advanced settings. Defaults to False."""
 
     distribution_cfg: DistributionCfg | None = None
     """The configuration for the output distribution. Defaults to None, in which case no distribution is used."""
@@ -78,8 +98,26 @@ class ZRlMLPModelCfg:
 
 
 @configclass
-class ZRlRNNModelCfg(ZRlMLPModelCfg):
-    """Configuration for RNN model."""
+class ZRlComposableModelCfg(ZRlMLPModelCfg):
+    """Configuration for a model composed from optional latent and head specs."""
+
+    class_name: str = "ComposableModel"
+    """The model class name. Defaults to ComposableModel."""
+
+    latent_spec: dict | None = None
+    """Optional latent spec reference: ``{"class_name": ..., ...}`` or omitted for the default adapter."""
+
+    head_spec: dict | None = None
+    """Optional head spec reference: ``{"class_name": ..., ...}`` or omitted for the default MLP head."""
+
+
+@configclass
+class ZRlRNNModelCfg(ZRlComposableModelCfg):
+    """Configuration for RNN model.
+
+    RNN is the recurrent backbone. Optional ``latent_spec`` / ``head_spec`` compose vision
+    encoding or a custom head, for example ``CNNLatentSpec`` for CNN+RNN visual distillation.
+    """
 
     class_name: str = "RNNModel"
     """The model class name. Defaults to RNNModel."""
@@ -95,6 +133,69 @@ class ZRlRNNModelCfg(ZRlMLPModelCfg):
 
 
 @configclass
+class ZRlGroupMLPEncoderModelCfg(ZRlComposableModelCfg):
+    """Configuration for the per-observation-group MLP encoder model."""
+
+    class_name: str = "GroupMLPEncoderModel"
+    """The model class name. Defaults to GroupMLPEncoderModel."""
+
+    encoder_cfgs: dict[str, dict] = MISSING
+    """Per-group encoder settings keyed by observation group name.
+
+    For example::
+
+        encoder_cfgs = {
+            "proprio": {
+                "output_dim": 128,
+                "hidden_dims": [256],
+                "activation": "elu",
+                "layer_norm": "pre_activation",
+                "obs_normalization": False,
+            },
+            "object": {
+                "output_dim": 64,
+                "hidden_dims": [128],
+                "obs_normalization": {"stats_shape": (1,), "eps": 1.0e-2},
+            },
+        }
+
+    Every active observation group must be configured with an ``output_dim``.
+    Optional keys are ``hidden_dims``, ``activation``, ``layer_norm``, and ``obs_normalization``.
+    Per-group ``layer_norm`` accepts ``None``, ``"pre_activation"``, or ``"post_activation"``
+    for the encoder's hidden layers; it is independent of the model-level MLP head setting.
+    A group's ``obs_normalization`` overrides the model-level setting for that group only:
+    ``False`` disables it, ``True`` uses the default empirical normalizer, and a dictionary
+    configures that group's ``EmpiricalNormalization``. Omitting the key keeps the model-level setting.
+    """
+
+    append_last_obs: bool = False
+    """Whether to concatenate the last observation frame of ``append_obs_group`` to the encoded latent."""
+
+    append_obs_group: str = "policy"
+    """Observation group whose last frame is appended when ``append_last_obs`` is enabled."""
+
+
+@configclass
+class ZRlSimBaModelCfg(ZRlComposableModelCfg):
+    """Configuration for the SimBaV2 output-head model."""
+
+    class_name: str = "SimBaModel"
+    """The model class name. Defaults to SimBaModel."""
+
+    hidden_dim: int = 512
+    """The hidden dimension of each SimBa block."""
+
+    num_blocks: int = 2
+    """The number of SimBa residual blocks."""
+
+    expansion: int = 4
+    """The expansion factor used inside each SimBa block."""
+
+    c_shift: float = 3.0
+    """The hyperspherical residual shift."""
+
+
+@configclass
 class ZRlMoEModelCfg:
     """Configuration for MoE model."""
 
@@ -104,8 +205,8 @@ class ZRlMoEModelCfg:
     activation: str = MISSING
     """The activation function for the expert and gate networks."""
 
-    obs_normalization: bool = False
-    """Whether to normalize the observation for the model. Defaults to False."""
+    obs_normalization: bool | ZRlEmpiricalNormalizationCfg = False
+    """Observation normalization switch or advanced settings. Defaults to False."""
 
     distribution_cfg: ZRlMLPModelCfg.DistributionCfg | None = None
     """The configuration for the output distribution. Defaults to None, in which case no distribution is used."""
@@ -139,13 +240,13 @@ class ZRlMoEModelCfg:
 
 
 @configclass
-class ZRlEncoderMLPModelCfg(ZRlMLPModelCfg):
+class ZRlMLPEncoderModelCfg(ZRlMLPModelCfg):
     """Configuration for encoder-based MLP model."""
 
-    class_name: str = "EncoderMLPModel"
-    """The model class name. Defaults to EncoderMLPModel."""
+    class_name: str = "MLPEncoderModel"
+    """The model class name. Defaults to MLPEncoderModel."""
 
-    latent_dim: int = 128
+    encoder_latent_dim: int = 128
     """The latent dimension produced by the encoder branch."""
 
     encoder_hidden_dims: list[int] = MISSING
@@ -154,39 +255,22 @@ class ZRlEncoderMLPModelCfg(ZRlMLPModelCfg):
     encoder_activation: str = "elu"
     """The activation function for the encoder MLP. Defaults to elu."""
 
-    concat_last_obs: bool = False
+    append_last_obs: bool = False
     """Whether to concatenate the last observation frame to the encoder latent. Defaults to False."""
 
-
-@configclass
-class ZRlVAEModelCfg(ZRlMLPModelCfg):
-    """Configuration for VAE-based model."""
-
-    class_name: str = "VAEModel"
-    """The model class name. Defaults to VAEModel."""
-
-    latent_dim: int = 64
-    """The latent dimension produced by the VAE encoder branch."""
-
-    encoder_hidden_dims: list[int] = MISSING
-    """The hidden dimensions of the VAE encoder MLP."""
-
-    decoder_input_dim: int | None = None
-    """The latent slice dimension consumed by the VAE decoder. If None, defaults to latent_dim."""
-
-    decoder_hidden_dims: list[int] = MISSING
-    """The hidden dimensions of the VAE decoder MLP."""
-
-    vae_activation: str = "elu"
-    """The activation function for the VAE encoder/decoder MLPs. Defaults to elu."""
+    append_obs_group: str = "policy"
+    """Observation group whose last frame is appended when ``append_last_obs`` is enabled."""
 
 
 @configclass
 class ZRlCNNModelCfg(ZRlMLPModelCfg):
-    """Configuration for CNN model."""
+    """Configuration for a CNN encoder over a single 2D observation group."""
 
     class_name: str = "CNNModel"
     """The model class name. Defaults to CNNModel."""
+
+    image_obs_group: str = MISSING
+    """The 2D observation group encoded by the CNN."""
 
     @configclass
     class CNNCfg:
@@ -243,6 +327,12 @@ class ZRlCNNModelCfg(ZRlMLPModelCfg):
     cnn_init_weights: bool = False
     """Optional do Kaiming initialization to cnns."""
 
+    append_last_obs: bool = False
+    """Whether to concatenate the last observation frame of ``append_obs_group`` to the encoded latent."""
+
+    append_obs_group: str = "policy"
+    """Observation group whose last frame is appended when ``append_last_obs`` is enabled."""
+
 
 ############################
 # Algorithm configurations #
@@ -286,6 +376,17 @@ class ZRlPpoAlgorithmCfg:
     optimizer: Literal["adam", "adamw", "sgd", "rmsprop"] = "adam"
     """The optimizer to use. Defaults to adam."""
 
+    use_muon: bool = False
+    """Whether to use Muon+AdamW instead of a single optimizer. Defaults to False.
+
+    Muon is intended for hidden 2-D weight matrices only. Biases, normalization parameters,
+    policy std heads, and input/output linear layers remain on AdamW. Requires a PyTorch build
+    that provides ``torch.optim.Muon`` (approximately 2.9+). When enabled, ``optimizer`` is ignored.
+    """
+
+    muon_adamw_weight_decay: float = 0.01
+    """AdamW weight decay used by the non-Muon parameter group when ``use_muon`` is enabled."""
+
     value_loss_coef: float = MISSING
     """The coefficient for the value loss."""
 
@@ -303,10 +404,43 @@ class ZRlPpoAlgorithmCfg:
     """
 
     share_cnn_encoders: bool = False
-    """Whether to share the CNN networks between actor and critic, in case CNNModels are used. Defaults to False."""
+    """Deprecated. Actor and critic each build their own CNN encoder. Must stay False."""
+
+    use_mixed_precision: bool = False
+    """Whether to run the forward pass and loss computation in bfloat16 autocast. Defaults to False.
+
+    Backward, gradient clipping, and the optimizer step always stay in fp32.
+    """
+
+    grad_reduce_bucket_mb: float = 25.0
+    """Maximum size, in megabytes, of a packed gradient buffer during multi-GPU reduction. Defaults to 25.
+
+    Matches ``torch.nn.parallel.DistributedDataParallel``'s default ``bucket_cap_mb``.
+    """
+
+    symmetry_augmentation: bool = False
+    """Whether to append mirrored samples to each rollout mini-batch. Defaults to False.
+
+    The rollout buffer keeps only the original transitions; augmentation is applied lazily during PPO updates.
+    """
 
     symmetry_cfg: ZRlSymmetryCfg | None = None
-    """The symmetry configuration. Defaults to None, in which case symmetry is not used."""
+    """Optional mirror-loss and diagnostic settings."""
+
+
+@configclass
+class ZRlComposablePpoAlgorithmCfg(ZRlPpoAlgorithmCfg):
+    """Configuration for PPO composed from a loss spec.
+
+    Point ``loss_spec`` at a ``PPOLossSpec`` class. Spec fields named ``<loss_key>_coef`` are
+    copied onto the algorithm so they weight the corresponding extra loss.
+    """
+
+    class_name: str = "ComposablePPO"
+    """The algorithm class name. Defaults to ComposablePPO."""
+
+    loss_spec: dict = MISSING
+    """Loss spec reference: ``{"class_name": "MyAuxLossSpec", "my_aux_loss_coef": 0.1, ...}``."""
 
 
 @configclass
@@ -324,6 +458,27 @@ class ZRlEncoderEstimationPpoAlgorithmCfg(ZRlPpoAlgorithmCfg):
 
     target_obs_term_names: list[str] = ["base_lin_vel"]
     """The observation terms selected from ``target_obs_group_name`` as the estimation target."""
+
+
+@configclass
+class ZRlMoEPpoAlgorithmCfg(ZRlPpoAlgorithmCfg):
+    """Configuration for PPO with MoE routing regularizers."""
+
+    class_name: str = "MoEPPO"
+    """The algorithm class name. Defaults to MoEPPO."""
+
+    gate_entropy_loss_coef: float = 0.0
+    """Coefficient for the (negated) gate-entropy term. Defaults to 0.
+
+    Positive values encourage a flatter per-sample mixture. Leave at 0 unless the gate is
+    collapsing to a hard assignment on every sample and that is undesirable.
+    """
+
+    expert_balance_loss_coef: float = 1.0e-4
+    """Coefficient for the expert-balance term. Defaults to 1e-4.
+
+    This is ``KL(mean_gate || uniform)`` and is the term that targets unused experts.
+    """
 
 
 #########################
@@ -405,7 +560,7 @@ class ZRlBaseRunnerCfg:
     ``{time-stamp}_{run_name}``.
     """
 
-    logger: Literal["tensorboard", "neptune", "wandb"] | dict = "tensorboard"
+    logger: Literal["tensorboard", "neptune", "wandb", "swanlab", "comet", "trackio"] | dict = "tensorboard"
     """The logger to use. Defaults to tensorboard. Dict configs may specify a custom LogWriter."""
 
     neptune_project: str = "isaaclab"
@@ -413,6 +568,15 @@ class ZRlBaseRunnerCfg:
 
     wandb_project: str = "isaaclab"
     """The wandb project name. Defaults to "isaaclab"."""
+
+    swanlab_project: str = "isaaclab"
+    """The swanlab project name. Defaults to "isaaclab"."""
+
+    comet_project: str = "isaaclab"
+    """The Comet project name. Defaults to "isaaclab"."""
+
+    trackio_project: str = "isaaclab"
+    """The Trackio project name. Defaults to "isaaclab"."""
 
     resume: bool = False
     """Whether to resume a previous training. Defaults to False.
@@ -449,5 +613,10 @@ class ZRlOnPolicyRunnerCfg(ZRlBaseRunnerCfg):
     algorithm: ZRlPpoAlgorithmCfg = MISSING
     """The algorithm configuration."""
 
-    check_nan: bool = False
-    """Whether to check for NaN values during training. Defaults to False."""
+    torch_compile_mode: str | None = None
+    """Optional torch.compile mode for the actor and critic networks.
+
+    ``None`` (default) disables compilation. Supported values are ``"default"`` and
+    ``"max-autotune-no-cudagraphs"``. The CUDA-graph modes (``"reduce-overhead"`` and
+    ``"max-autotune"``) are not compatible with the multi-model PPO forward pattern.
+    """

@@ -15,6 +15,7 @@ from z_rl.env import VecEnv
 from z_rl.models import MLPModel
 from z_rl.utils import check_nan, resolve_callable
 from z_rl.utils.logger import Logger
+from z_rl.utils.onnx_export import export_to_onnx
 
 
 class OnPolicyRunner:
@@ -61,6 +62,7 @@ class OnPolicyRunner:
         )
 
         self.current_learning_iteration = 0
+        self.checkpoint_infos: dict = {}
 
     def learn(self, num_learning_iterations: int, init_at_random_ep_len: bool = False) -> None:
         """Run the learning loop for the specified number of iterations."""
@@ -134,7 +136,7 @@ class OnPolicyRunner:
         """Save the models and training state to a given path and upload them if external logging is used."""
         saved_dict = self.alg.save()
         saved_dict["iter"] = self.current_learning_iteration
-        saved_dict["infos"] = infos
+        saved_dict["infos"] = {**self.checkpoint_infos, **(infos or {})} or None
         torch.save(saved_dict, path)
         # Upload model to external logging services
         self.logger.save_model(path, self.current_learning_iteration)
@@ -162,6 +164,7 @@ class OnPolicyRunner:
         load_iteration = self.alg.load(loaded_dict, load_cfg, strict)
         if load_iteration:
             self.current_learning_iteration = loaded_dict["iter"]
+            self.checkpoint_infos = dict(loaded_dict.get("infos") or {})
         return loaded_dict["infos"]
 
     def get_inference_policy(self, device: str | None = None) -> MLPModel:
@@ -180,7 +183,7 @@ class OnPolicyRunner:
         save_path = os.path.join(path, filename)
 
         # Trace and save the model
-        torch.onnx.export(
+        export_to_onnx(
             onnx_model,
             onnx_model.get_dummy_inputs(),  # type: ignore
             save_path,

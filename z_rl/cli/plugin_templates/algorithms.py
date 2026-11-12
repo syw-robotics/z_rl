@@ -1,39 +1,29 @@
 """Algorithm template sources for plugin scaffold generation."""
 
-ALGORITHMS_INIT_TEMPLATE = "from .my_ppo import MyPPO\n\n__all__ = [\"MyPPO\"]\n"
+ALGORITHMS_INIT_TEMPLATE = "from .my_loss import MyAuxLossSpec\n\n__all__ = [\"MyAuxLossSpec\"]\n"
 
-ALGORITHMS_MY_PPO_TEMPLATE = """from __future__ import annotations
+ALGORITHMS_MY_LOSS_TEMPLATE = """from __future__ import annotations
+
+from dataclasses import dataclass
 
 import torch
 
-from z_rl.env import VecEnv
-from z_rl.algorithms.composition import ComposablePPO, PPOLossSpec
+from z_rl.algorithms.composition import PPOLossSpec
 from z_rl.storage import RolloutStorage
 
 
+@dataclass
 class MyAuxLossSpec(PPOLossSpec):
     \"\"\"Example PPO loss spec with one extra loss term.\"\"\"
 
-    def validate(self, algo) -> None:
-        return None
+    my_aux_loss_coef: float = 0.1
 
     def compute(
         self,
         algo,
         minibatch: RolloutStorage.Batch,
     ) -> tuple[dict[str, torch.Tensor], dict[str, torch.Tensor]]:
+        del algo
         dummy_loss = torch.zeros((), device=minibatch.actions.device)
         return {\"my_aux_loss\": dummy_loss}, {}
-
-
-class MyPPO(ComposablePPO):
-    \"\"\"Example PPO variant that only needs to define its loss spec.\"\"\"
-
-    @classmethod
-    def build_loss_spec(cls, env: VecEnv, algorithm_cfg: dict) -> PPOLossSpec:
-        return MyAuxLossSpec()
-
-    def __init__(self, *args, my_aux_loss_coef: float = 0.0, **kwargs) -> None:
-        self.my_aux_loss_coef = my_aux_loss_coef
-        super().__init__(*args, **kwargs)
 """

@@ -6,7 +6,7 @@ from pathlib import Path
 
 from .plugin_templates import (
     ALGORITHMS_INIT_TEMPLATE,
-    ALGORITHMS_MY_PPO_TEMPLATE,
+    ALGORITHMS_MY_LOSS_TEMPLATE,
     MODELS_INIT_TEMPLATE,
     MODELS_MODEL_TEMPLATE,
     render_readme_template,
@@ -89,8 +89,8 @@ include = ["{package_name}*"]
         ALGORITHMS_INIT_TEMPLATE,
     )
     _write_file(
-        package_dir / "algorithms" / "my_ppo.py",
-        ALGORITHMS_MY_PPO_TEMPLATE,
+        package_dir / "algorithms" / "my_loss.py",
+        ALGORITHMS_MY_LOSS_TEMPLATE,
     )
     _write_file(
         package_dir / "models" / "__init__.py",

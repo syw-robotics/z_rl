@@ -11,6 +11,7 @@ from .mlp import MLP
 from .moe import MoE
 from .normalization import EmpiricalDiscountedVariationNormalization, EmpiricalNormalization
 from .rnn import RNN, HiddenState
+from .simba import SimBa
 from .vae import VAE
 
 __all__ = [
@@ -19,6 +20,7 @@ __all__ = [
     "MoE",
     "VAE",
     "RNN",
+    "SimBa",
     "BetaDistribution",
     "Distribution",
     "EmpiricalDiscountedVariationNormalization",

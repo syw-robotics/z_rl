@@ -7,21 +7,25 @@
 from __future__ import annotations
 
 import copy
+from typing import Any
+
 import torch
 import torch.nn as nn
 from tensordict import TensorDict
 
-from z_rl.models.mlp_model import MLPModel, _as_export_latent_adapter
+from z_rl.models.composition import ComposableModel
+from z_rl.models.mlp_model import ObservationNormalizationConfig, _as_export_latent_adapter
 from z_rl.modules import RNN, HiddenState
 
 
-class RNNModel(MLPModel):
-    """RNN-based neural model.
+class RNNModel(ComposableModel):
+    """Recurrent ``ComposableModel`` backbone.
 
     Data flow: ``obs TensorDict -> latent adapter -> RNN -> head -> (distribution) -> output``.
 
-    The latent adapter produces the RNN input from structured observations. The default adapter preserves the previous
-    behavior by flattening active observation groups and optionally normalizing them.
+    The latent adapter produces the RNN input from structured observations. The default adapter concatenates
+    1D observation groups. Pass ``latent_spec`` (for example ``CNNLatentSpec``) or ``head_spec`` to compose
+    vision encoding or a custom head without turning the RNN itself into a spec.
     """
 
     is_recurrent: bool = True
@@ -35,33 +39,52 @@ class RNNModel(MLPModel):
         output_dim: int,
         hidden_dims: tuple[int, ...] | list[int] = (256, 256, 256),
         activation: str = "elu",
-        obs_normalization: bool = False,
+        obs_normalization: ObservationNormalizationConfig = False,
         distribution_cfg: dict | None = None,
         rnn_type: str = "lstm",
         rnn_hidden_dim: int = 256,
         rnn_num_layers: int = 1,
+        latent_spec: Any = None,
+        head_spec: Any = None,
+        **kwargs,
     ) -> None:
         """Initialize the RNN-based model."""
-        self.latent_dim = rnn_hidden_dim
-
+        self.rnn_type = rnn_type
+        self.rnn_hidden_dim = rnn_hidden_dim
+        self.rnn_num_layers = rnn_num_layers
         super().__init__(
             obs,
             obs_groups,
             obs_set,
             output_dim,
-            hidden_dims,
-            activation,
-            obs_normalization,
-            distribution_cfg,
+            hidden_dims=hidden_dims,
+            activation=activation,
+            obs_normalization=obs_normalization,
+            distribution_cfg=distribution_cfg,
+            latent_spec=latent_spec,
+            head_spec=head_spec,
+            **kwargs,
         )
 
-        self.rnn = RNN(self.obs_dim, rnn_hidden_dim, rnn_num_layers, rnn_type)
+    def build_latent_adapter(self) -> nn.Module:
+        """Build the latent adapter, then size the RNN from the adapter output.
+
+        The adapter (or ``latent_spec``) determines the RNN input width. The head then consumes
+        ``rnn_hidden_dim``, not the adapter width.
+        """
+        adapter = super().build_latent_adapter()
+        # define the rnn module
+        self.rnn = RNN(int(self.latent_dim), self.rnn_hidden_dim, self.rnn_num_layers, self.rnn_type)
+        # head input dim is the rnn hidden dim
+        self.latent_dim = self.rnn_hidden_dim
+        return adapter
 
     def get_latent(
         self, obs: TensorDict, masks: torch.Tensor | None = None, hidden_state: HiddenState = None
     ) -> torch.Tensor:
         """Build the model latent by passing adapter output through the RNN."""
         latent = super().get_latent(obs)
+        # append a rnn module after the latent adapter, before the head
         latent = self.rnn(latent, masks, hidden_state).squeeze(0)
         return latent
 
@@ -78,12 +101,12 @@ class RNNModel(MLPModel):
         self.rnn.detach_hidden_state(dones)
 
     def as_onnx(self, verbose: bool = False) -> nn.Module:
-        """Return a version of the model compatible with ONNX export."""
-        return _OnnxRNNModel(self, verbose)
+        """Return a version of the model compatible with ONNX export.
 
-    def get_latent_dim(self) -> int:
-        """Return the latent dimensionality consumed by the model head."""
-        return self.latent_dim
+        Export is vector-obs only: one concatenated ``obs`` tensor plus recurrent state
+        (``h_in`` / ``c_in``). Extra adapter inputs such as a CNN image are not packed here.
+        """
+        return _OnnxRNNModel(self, verbose)
 
 
 class _OnnxRNNModel(nn.Module):
@@ -118,20 +141,14 @@ class _OnnxRNNModel(nn.Module):
         self, obs: torch.Tensor, h_in: torch.Tensor, c_in: torch.Tensor | None = None
     ) -> tuple[torch.Tensor, torch.Tensor, torch.Tensor | None]:
         """Run deterministic inference for ONNX export."""
-        x = self.latent_adapter(obs)
-
+        latent = self.latent_adapter(obs)
         if self.rnn_type == "lstm":
-            x, (h, c) = self.rnn(x.unsqueeze(0), (h_in, c_in))
-            x = x.squeeze(0)
-            out = self.head(x)
-            out = self.deterministic_output(out)
-            return out, h, c
-
-        x, h = self.rnn(x.unsqueeze(0), h_in)
-        x = x.squeeze(0)
-        out = self.head(x)
-        out = self.deterministic_output(out)
-        return out, h, None
+            latent, (h_out, c_out) = self.rnn(latent.unsqueeze(0), (h_in, c_in))
+            actions = self.deterministic_output(self.head(latent.squeeze(0)))
+            return actions, h_out, c_out
+        latent, h_out = self.rnn(latent.unsqueeze(0), h_in)
+        actions = self.deterministic_output(self.head(latent.squeeze(0)))
+        return actions, h_out, None
 
     def get_dummy_inputs(self) -> tuple[torch.Tensor, ...]:
         """Return representative dummy inputs for ONNX tracing."""

@@ -38,8 +38,9 @@ def _make_critic(obs, obs_groups):
 
 
 class _DummyLossSpec(PPOLossSpec):
-    def __init__(self) -> None:
+    def __init__(self, aux_loss_coef: float = 1.0) -> None:
         self.validated_algo = None
+        self.aux_loss_coef = aux_loss_coef
 
     def validate(self, algo: object) -> None:
         self.validated_algo = algo
@@ -47,6 +48,16 @@ class _DummyLossSpec(PPOLossSpec):
     def compute(self, algo: object, minibatch: RolloutStorage.Batch):
         del algo, minibatch
         return {"aux_loss": torch.tensor(2.0)}, {"aux_metric": torch.tensor(3.0)}
+
+
+class _ContextLossSpec(PPOLossSpec):
+    def validate(self, algo: object) -> None:
+        del algo
+
+    def compute(self, algo: object, minibatch: RolloutStorage.Batch):
+        del minibatch
+        latent = algo.actor_forward_context["latent"]  # type: ignore[attr-defined]
+        return {"aux_loss": latent.square().mean()}, {}
 
 
 class TestComposablePPO:
@@ -91,6 +102,33 @@ class TestComposablePPO:
         assert opt_losses["aux_loss"].item() == 2.0
         assert non_opt_losses["kl"].item() == 0.5
         assert non_opt_losses["aux_metric"].item() == 3.0
+        assert algo.aux_loss_coef == 1.0
+
+    def test_build_loss_spec_from_config_dict(self) -> None:
+        from z_rl.algorithms import MoERoutingLossSpec
+
+        algorithm_cfg = {
+            "loss_spec": {"class_name": "MoERoutingLossSpec", "expert_balance_loss_coef": 0.3},
+            "value_loss_coef": 1.0,
+        }
+
+        spec = ComposablePPO.build_loss_spec(env=None, algorithm_cfg=algorithm_cfg)
+
+        assert isinstance(spec, MoERoutingLossSpec)
+        assert spec.expert_balance_loss_coef == 0.3
+        assert "loss_spec" not in algorithm_cfg
+        assert algorithm_cfg["value_loss_coef"] == 1.0
+
+    def test_build_loss_spec_binds_flat_coef_fields(self) -> None:
+        from z_rl.algorithms import MoEPPO, MoERoutingLossSpec
+
+        algorithm_cfg = {"expert_balance_loss_coef": 0.4, "value_loss_coef": 1.0}
+        spec = MoEPPO.build_loss_spec(env=None, algorithm_cfg=algorithm_cfg)
+
+        assert isinstance(spec, MoERoutingLossSpec)
+        assert spec.expert_balance_loss_coef == 0.4
+        assert "expert_balance_loss_coef" not in algorithm_cfg
+        assert algorithm_cfg["value_loss_coef"] == 1.0
 
     def test_subclass_can_override_act(self) -> None:
         class _CustomActionPPO(ComposablePPO):
@@ -137,7 +175,7 @@ class TestComposablePPO:
         transition.actions = actor(obs, stochastic_output=True).detach()
         transition.values = critic(obs).detach()
         transition.actions_log_prob = actor.get_output_log_prob(transition.actions).detach()
-        transition.distribution_params = tuple(p.detach() for p in actor.output_distribution_params)
+        transition.distribution_params = tuple(p.detach() for p in actor.distribution.params)
         transition.rewards = torch.ones(NUM_ENVS)
         transition.dones = torch.zeros(NUM_ENVS)
         storage.add_transition(transition)
@@ -147,3 +185,31 @@ class TestComposablePPO:
         algo.compute_loss(minibatch)
 
         assert algo.forward_actor_for_update_called
+
+    def test_update_actor_forward_exposes_reusable_latent_context(self) -> None:
+        obs = make_obs(NUM_ENVS, OBS_DIM)
+        obs_groups = {"actor": ["policy"], "critic": ["policy"]}
+        actor = _make_actor(obs, obs_groups)
+        critic = _make_critic(obs, obs_groups)
+        storage = RolloutStorage("rl", NUM_ENVS, NUM_STEPS, obs, [NUM_ACTIONS])
+        algo = ComposablePPO(actor, critic, storage, loss_spec=_ContextLossSpec())
+
+        transition = RolloutStorage.Transition()
+        transition.observations = obs
+        transition.hidden_states = (None, None)
+        transition.actions = actor(obs, stochastic_output=True).detach()
+        transition.values = critic(obs).detach()
+        transition.actions_log_prob = actor.get_output_log_prob(transition.actions).detach()
+        transition.distribution_params = tuple(p.detach() for p in actor.distribution.params)
+        transition.rewards = torch.ones(NUM_ENVS)
+        transition.dones = torch.zeros(NUM_ENVS)
+        storage.add_transition(transition)
+        algo.compute_returns(obs)
+
+        minibatch = next(storage.mini_batch_generator(num_mini_batches=1, num_epochs=1))
+        opt_losses, extra_losses = algo.compute_loss(minibatch)
+
+        assert "aux_loss" not in extra_losses
+        assert "aux_loss" in opt_losses
+        assert algo.actor_forward_context is not None
+        assert algo.actor_forward_context["latent"].shape[0] == minibatch.observations.batch_size[0]

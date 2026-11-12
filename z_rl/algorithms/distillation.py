@@ -8,12 +8,21 @@ from __future__ import annotations
 
 import torch
 import torch.nn as nn
+import warnings
 from tensordict import TensorDict
 
 from z_rl.env import VecEnv
 from z_rl.models import MLPModel
 from z_rl.storage import RolloutStorage
-from z_rl.utils import compile_model, inject_obs_time_slice_map, resolve_callable, resolve_obs_groups, resolve_optimizer
+from z_rl.utils import (
+    compile_model,
+    inject_obs_time_slice_map,
+    reduce_gradients_in_buckets,
+    resolve_class,
+    resolve_obs_groups,
+)
+from z_rl.utils.checkpoint import model_checkpoint_entries, module_state_dict_from_checkpoint
+from z_rl.utils.opt import build_optimizer
 
 
 def _pop_model_init_config(model_cfg: dict) -> tuple[float | tuple[float, ...] | None, bool | None]:
@@ -35,10 +44,12 @@ def _apply_model_init_config(
         print(f"{model_name} Head uses orthogonal init: {init_weights}")
 
     if cnn_init_weights:
-        if not hasattr(model, "cnns"):
-            raise ValueError(f"{model_name} received cnn_init_weights=True but the model does not define CNN encoders.")
-        for cnn in model.cnns.values():  # type: ignore[attr-defined]
-            cnn.init_cnn_weights()
+        cnn = getattr(getattr(model, "latent_adapter", None), "cnn", None)
+        if cnn is None or not hasattr(cnn, "init_cnn_weights"):
+            raise ValueError(
+                f"{model_name} received cnn_init_weights=True but the model does not define a CNN encoder."
+            )
+        cnn.init_cnn_weights()
         print(f"{model_name} CNNs use kaiming init")
 
 
@@ -65,10 +76,14 @@ class Distillation:
         max_grad_norm: float | None = None,
         loss_type: str = "mse",
         optimizer: str = "adam",
+        use_muon: bool = False,  # Muon for hidden 2-D weights; AdamW for biases/heads (see utils.opt)
+        muon_adamw_weight_decay: float = 0.01,
+        use_mixed_precision: bool = False,
         student_stochastic_output: bool = False,
         device: str = "cpu",
         # Distributed training parameters
         multi_gpu_cfg: dict | None = None,
+        grad_reduce_bucket_mb: float = 25,
         **kwargs: dict,  # handle unused config parameters
     ) -> None:
         """Initialize the algorithm with models, storage, and optimization settings."""
@@ -83,6 +98,7 @@ class Distillation:
         else:
             self.gpu_global_rank = 0
             self.gpu_world_size = 1
+        self.grad_reduce_bucket_mb = grad_reduce_bucket_mb
 
         # Distillation components
         self.student = student.to(self.device)
@@ -90,8 +106,14 @@ class Distillation:
         self._raw_student = self.student
         self._raw_teacher = self.teacher
 
-        # Create the optimizer
-        self.optimizer = resolve_optimizer(optimizer)(self.student.parameters(), lr=learning_rate)  # type: ignore
+        # Only the student is optimized. Teacher stays out of the optimizer even if its parameters are unfrozen.
+        self.optimizer = build_optimizer(
+            [self.student],
+            learning_rate=learning_rate,
+            optimizer=optimizer,
+            use_muon=use_muon,
+            muon_adamw_weight_decay=muon_adamw_weight_decay,
+        )
 
         # Add storage
         self.storage = storage
@@ -103,7 +125,19 @@ class Distillation:
         self.gradient_length = gradient_length
         self.learning_rate = learning_rate
         self.max_grad_norm = max_grad_norm
+        self.use_mixed_precision = use_mixed_precision
         self.student_stochastic_output = student_stochastic_output
+
+        # Warn about rollout steps not used for optimization
+        total_steps = num_learning_epochs * storage.num_transitions_per_env
+        if total_steps % gradient_length != 0:
+            warnings.warn(
+                f"The product of 'num_learning_epochs' ({num_learning_epochs}) and 'num_steps_per_env'"
+                f" ({storage.num_transitions_per_env}) is not divisible by 'gradient_length' ({gradient_length})."
+                f" The last {total_steps % gradient_length} of {total_steps} steps per update are accumulated but"
+                f" never backpropagated. Consider setting 'gradient_length' to a divisor of {total_steps}.",
+                stacklevel=2,
+            )
 
         # Initialize the loss function
         loss_fn_dict = {
@@ -129,9 +163,7 @@ class Distillation:
     def process_env_step(
         self, obs: TensorDict, rewards: torch.Tensor, dones: torch.Tensor, extras: dict[str, torch.Tensor]
     ) -> None:
-        """Record one environment step and update the normalizers."""
-        # Update the normalizers
-        self.student.update_normalization(obs)
+        """Record one environment step."""
         # Record the rewards and dones
         self.transition.rewards = rewards
         self.transition.dones = dones
@@ -158,11 +190,15 @@ class Distillation:
             self.teacher.reset(hidden_state=self.last_hidden_states[1])
             self.student.detach_hidden_state()
             for batch in self.storage.generator():
-                # Inference of the student for gradient computation
-                actions = self.student(batch.observations, stochastic_output=self.student_stochastic_output)
+                # Optionally use mixed precision for the forward pass and loss computation
+                with torch.amp.autocast(  # type: ignore
+                    device_type=torch.device(self.device).type, enabled=self.use_mixed_precision, dtype=torch.bfloat16
+                ):
+                    # Inference of the student for gradient computation
+                    actions = self.student(batch.observations, stochastic_output=self.student_stochastic_output)
 
-                # Behavior cloning loss
-                behavior_loss = self.loss_fn(actions, batch.privileged_actions)
+                    # Behavior cloning loss
+                    behavior_loss = self.loss_fn(actions, batch.privileged_actions)
 
                 # Total loss
                 loss = loss + behavior_loss
@@ -186,13 +222,21 @@ class Distillation:
                 self.teacher.reset(batch.dones.view(-1))
                 self.student.detach_hidden_state(batch.dones.view(-1))
 
-        mean_behavior_loss /= cnt
-        self.storage.clear()
+        # Store the last hidden states for the next update
         self.last_hidden_states = (self.student.get_hidden_state(), self.teacher.get_hidden_state())
         self.student.detach_hidden_state()
 
+        # Update the normalizer from the collected rollout after optimization
+        self.student.update_normalization(self.storage.observations.flatten(0, 1))  # type: ignore
+
+        # Divide the loss by the number of updates
+        mean_behavior_loss /= cnt
+
         # Construct the loss dictionary
         loss_dict = {"behavior": mean_behavior_loss}
+
+        # Clear the storage
+        self.storage.clear()
 
         return loss_dict
 
@@ -210,8 +254,8 @@ class Distillation:
     def save(self) -> dict:
         """Return a dict of all models for saving."""
         saved_dict = {
-            "student_state_dict": self._raw_student.state_dict(),
-            "teacher_state_dict": self._raw_teacher.state_dict(),
+            **model_checkpoint_entries("student", self._raw_student),
+            **model_checkpoint_entries("teacher", self._raw_teacher),
             "optimizer_state_dict": self.optimizer.state_dict(),
         }
         return saved_dict
@@ -232,6 +276,15 @@ class Distillation:
         # Load the specified models
         if load_cfg.get("student"):
             self._raw_student.load_state_dict(loaded_dict["student_state_dict"], strict=strict)
+        student_modules = load_cfg.get("student_modules")
+        if student_modules:
+            if not isinstance(student_modules, dict):
+                raise TypeError("`student_modules` must map module names to checkpoint roles.")
+            for module_name, source_role in student_modules.items():
+                if not isinstance(module_name, str) or not isinstance(source_role, str):
+                    raise TypeError("`student_modules` must map module names to checkpoint roles.")
+                module_state = module_state_dict_from_checkpoint(loaded_dict, module_name, role=source_role)
+                self._raw_student.load_module_state_dict(module_name, module_state, strict=strict)
         if load_cfg.get("teacher"):
             self._raw_teacher.load_state_dict(
                 loaded_dict.get("teacher_state_dict") or loaded_dict["actor_state_dict"], strict=strict
@@ -253,34 +306,34 @@ class Distillation:
     @staticmethod
     def construct_algorithm(obs: TensorDict, env: VecEnv, cfg: dict, device: str) -> Distillation:
         """Construct the distillation algorithm."""
-        # Resolve class callables
-        alg_class: type[Distillation] = resolve_callable(cfg["algorithm"].pop("class_name"))  # type: ignore
-        student_class: type[MLPModel] = resolve_callable(cfg["student"].pop("class_name"))  # type: ignore
-        teacher_class: type[MLPModel] = resolve_callable(cfg["teacher"].pop("class_name"))  # type: ignore
+        # Resolve class callables without mutating the original config (keeps class names for logging).
+        alg_class, alg_cfg = resolve_class(cfg["algorithm"])
+        student_class, student_cfg = resolve_class(cfg["student"])
+        teacher_class, teacher_cfg = resolve_class(cfg["teacher"])
 
         # Resolve observation groups
         default_sets = ["student", "teacher"]
         cfg["obs_groups"] = resolve_obs_groups(obs, cfg["obs_groups"], default_sets)
 
         # Distillation is not compatible with symmetry extensions
-        if cfg["algorithm"].get("symmetry_cfg") is not None:
+        if alg_cfg.get("symmetry_cfg") is not None:
             raise ValueError("The symmetry extension is not compatible with Distillation.")
-        cfg["algorithm"]["symmetry_cfg"] = None
+        alg_cfg["symmetry_cfg"] = None
 
         # Inject wrapper-provided time-slice metadata for models that can consume it.
-        inject_obs_time_slice_map(cfg["student"], student_class, env)
-        inject_obs_time_slice_map(cfg["teacher"], teacher_class, env)
+        inject_obs_time_slice_map(student_cfg, student_class, env)
+        inject_obs_time_slice_map(teacher_cfg, teacher_class, env)
 
         # Pop init-only configs before creating models (they are not model __init__ args)
-        student_init_weights, student_cnn_init_weights = _pop_model_init_config(cfg["student"])
-        teacher_init_weights, teacher_cnn_init_weights = _pop_model_init_config(cfg["teacher"])
+        student_init_weights, student_cnn_init_weights = _pop_model_init_config(student_cfg)
+        teacher_init_weights, teacher_cnn_init_weights = _pop_model_init_config(teacher_cfg)
 
         # Initialize the policy
-        student: MLPModel = student_class(obs, cfg["obs_groups"], "student", env.num_actions, **cfg["student"]).to(
+        student: MLPModel = student_class(obs, cfg["obs_groups"], "student", env.num_actions, **student_cfg).to(
             device
         )
         print(f"Student Model: {student}")
-        teacher: MLPModel = teacher_class(obs, cfg["obs_groups"], "teacher", env.num_actions, **cfg["teacher"]).to(
+        teacher: MLPModel = teacher_class(obs, cfg["obs_groups"], "teacher", env.num_actions, **teacher_cfg).to(
             device
         )
         print(f"Teacher Model: {teacher}")
@@ -293,7 +346,7 @@ class Distillation:
 
         # Initialize the algorithm
         alg: Distillation = alg_class(
-            student, teacher, storage, device=device, **cfg["algorithm"], multi_gpu_cfg=cfg["multi_gpu"]
+            student, teacher, storage, device=device, **alg_cfg, multi_gpu_cfg=cfg["multi_gpu"]
         )
         alg.compile(cfg.get("torch_compile_mode"))
 
@@ -301,31 +354,13 @@ class Distillation:
 
     def broadcast_parameters(self) -> None:
         """Broadcast model parameters to all GPUs."""
-        # Obtain the model parameters on current GPU
-        model_params = [self._raw_student.state_dict(), self._raw_teacher.state_dict()]
-        # Broadcast the model parameters
-        torch.distributed.broadcast_object_list(model_params, src=0)
-        # Load the model parameters on all GPUs from source GPU
-        self._raw_student.load_state_dict(model_params[0])
-        self._raw_teacher.load_state_dict(model_params[1])
+        for model in (self._raw_student, self._raw_teacher):
+            for tensor in model.state_dict().values():
+                torch.distributed.broadcast(tensor, src=0)
 
     def reduce_parameters(self) -> None:
         """Collect gradients from all GPUs and average them.
 
         This function is called after the backward pass to synchronize the gradients across all GPUs.
         """
-        # Create a tensor to store the gradients
-        grads = [param.grad.view(-1) for param in self.student.parameters() if param.grad is not None]
-        all_grads = torch.cat(grads)
-        # Average the gradients across all GPUs
-        torch.distributed.all_reduce(all_grads, op=torch.distributed.ReduceOp.SUM)
-        all_grads /= self.gpu_world_size
-        # Update the gradients for all parameters with the reduced gradients
-        offset = 0
-        for param in self.student.parameters():
-            if param.grad is not None:
-                numel = param.numel()
-                # Copy data back from shared buffer
-                param.grad.data.copy_(all_grads[offset : offset + numel].view_as(param.grad.data))
-                # Update the offset for the next parameter
-                offset += numel
+        reduce_gradients_in_buckets(self.student.parameters(), self.gpu_world_size, self.grad_reduce_bucket_mb)

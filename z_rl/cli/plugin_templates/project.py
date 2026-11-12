@@ -25,11 +25,10 @@ python -m pip install -e .
 └── rl_cfg.py
 ```
 
-The generated algorithm template follows the current `ComposablePPO` pattern:
+The generated templates follow spec-first composition:
 
-- define a `PPOLossSpec`
-- subclass `ComposablePPO`
-- override `build_loss_spec(env, algorithm_cfg)`
+- implement a `PPOLossSpec` / `LatentSpec` / `HeadSpec`
+- point IsaacLab config at `ComposablePPO` / `ComposableModel` plus the spec
 """
 
 
@@ -39,21 +38,24 @@ def render_rl_cfg_template(package_name: str) -> str:
 
 from isaaclab.utils import configclass
 
-from z_rl.adaptor.isaaclab.rl_cfg import ZRlMLPModelCfg, ZRlPpoAlgorithmCfg
+from z_rl.adaptor.isaaclab.rl_cfg import ZRlComposableModelCfg, ZRlComposablePpoAlgorithmCfg
 
 
 @configclass
-class MyPpoAlgorithmCfg(ZRlPpoAlgorithmCfg):
-    class_name: str = "{package_name}.algorithms.my_ppo:MyPPO"
-    my_aux_loss_coef: float = 0.1
+class MyPpoAlgorithmCfg(ZRlComposablePpoAlgorithmCfg):
+    loss_spec: dict = {{
+        "class_name": "{package_name}.algorithms.my_loss:MyAuxLossSpec",
+        "my_aux_loss_coef": 0.1,
+    }}
 
 
 @configclass
-class MyActorModelCfg(ZRlMLPModelCfg):
-    class_name: str = "{package_name}.models.my_model:MyActorModel"
+class MyActorModelCfg(ZRlComposableModelCfg):
+    latent_spec: dict = {{"class_name": "{package_name}.models.my_model:MyLatentSpec"}}
+    head_spec: dict = {{"class_name": "{package_name}.models.my_model:MyHeadSpec"}}
 
 
 @configclass
-class MyCriticModelCfg(ZRlMLPModelCfg):
-    class_name: str = "{package_name}.models.my_model:MyCriticModel"
+class MyCriticModelCfg(ZRlComposableModelCfg):
+    latent_spec: dict = {{"class_name": "{package_name}.models.my_model:MyLatentSpec"}}
 """

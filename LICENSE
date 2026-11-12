@@ -1,5 +1,6 @@
 Copyright (c) 2026, ETH Zurich
 Copyright (c) 2026, NVIDIA CORPORATION & AFFILIATES
+Copyright (c) 2026, Siyuan Wang
 All rights reserved.
 
 Redistribution and use in source and binary forms, with or without modification,
@@ -28,3 +29,4 @@ ON ANY THEORY OF LIABILITY, WHETHER IN CONTRACT, STRICT LIABILITY, OR TORT
 SOFTWARE, EVEN IF ADVISED OF THE POSSIBILITY OF SUCH DAMAGE.
 
 See licenses/dependencies for license information of dependencies of this package.
+Additional source attribution and licensing exceptions: see THIRD_PARTY_NOTICES.md.

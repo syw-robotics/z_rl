@@ -181,20 +181,23 @@ Implement your specs, then install your plugin in editable mode:
 cd my_zrl_plugin
 python -m pip install -e .
 ```
-
-## 📋 TODOs
-
-- ✅ Added and tested `MoEModel` as a model extension example
-- ✅ Added and tested `EncoderEstimationPPO` as a PPO extension example
-- ✅ Keep deployment/export ONNX-only and remove TorchScript export paths
-- ✅ Clarify latent adapter runtime/export contracts in model docs and plugin templates
-- ✅ Reorganize `CNNModel` into `CNNLatentSpec` (single 2D observation group)
-- ✅ Make `RNNModel` a composable recurrent backbone (`CNNLatentSpec` for CNN+RNN)
-- ❌ Support multiple PPO loss specs for combining auxiliary objectives
-- ❌ Add ONNX deployment notes for MLP/RNN/CNN policies
-- ❌ Update tests after the adapter/export contract settles
+<!--  -->
+<!-- ## 📋 TODOs -->
+<!--  -->
+<!-- - ✅ Added and tested `MoEModel` as a model extension example -->
+<!-- - ✅ Added and tested `EncoderEstimationPPO` as a PPO extension example -->
+<!-- - ✅ Keep deployment/export ONNX-only and remove TorchScript export paths -->
+<!-- - ✅ Clarify latent adapter runtime/export contracts in model docs and plugin templates -->
+<!-- - ✅ Reorganize `CNNModel` into `CNNLatentSpec` (single 2D observation group) -->
+<!-- - ✅ Make `RNNModel` a composable recurrent backbone (`CNNLatentSpec` for CNN+RNN) -->
+<!-- - ❌ Support multiple PPO loss specs for combining auxiliary objectives -->
+<!-- - ❌ Add ONNX deployment notes for MLP/RNN/CNN policies -->
+<!-- - ❌ Update tests after the adapter/export contract settles -->
 
 
 ## 📄 License
 
-BSD-3-Clause. See [LICENSE](LICENSE).
+Z-RL's original contributions and RSL-RL-derived code use the
+[BSD 3-Clause License](LICENSE), subject to the exceptions documented in
+[THIRD_PARTY_NOTICES.md](THIRD_PARTY_NOTICES.md). Upstream copyright notices are retained.
+

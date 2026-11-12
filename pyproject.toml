@@ -58,6 +58,7 @@ include = ["z_rl*", "adaptor*"]
 [tool.setuptools]
 license-files = [
     "LICENSE*",
+    "THIRD_PARTY_NOTICES.md",
     "licenses/dependencies/*.txt",
 ]
 

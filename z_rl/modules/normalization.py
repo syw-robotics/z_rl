@@ -57,6 +57,9 @@ class EmpiricalNormalization(nn.Module):
         self.register_buffer("count", torch.tensor(0, dtype=torch.long))
         self.register_buffer("_ema_count", torch.tensor(0.0))
 
+    def capture_config(self):
+        return (self.eps,)
+
     @property
     def mean(self) -> torch.Tensor:
         """Current running mean."""
@@ -75,7 +78,7 @@ class EmpiricalNormalization(nn.Module):
     @torch.jit.unused
     def update(self, x: torch.Tensor) -> None:
         """Update running moments from a batch while the normalizer is training."""
-        if not self.training or (self.until is not None and self.count >= self.until):
+        if not self.training or (not self.count.is_cuda and self.until is not None and self.count >= self.until):
             return
 
         x = x.reshape(-1, *self.input_shape).to(dtype=self._mean.dtype)
@@ -83,7 +86,7 @@ class EmpiricalNormalization(nn.Module):
         batch_mean = x.mean(dim=reduction_dims, keepdim=True)
         batch_var = x.var(dim=reduction_dims, unbiased=False, keepdim=True)
         local_count = x.shape[0]
-        batch_count = torch.tensor(local_count, dtype=self.count.dtype, device=self.count.device)
+        batch_count = self.count.new_full((), local_count)
 
         if torch.distributed.is_initialized():
             # Compute the global mean first, then combine the local variances around that mean.
@@ -108,11 +111,19 @@ class EmpiricalNormalization(nn.Module):
             batch_var + (batch_mean - mean).square()
         )
 
-        self._mean.copy_(mean)
-        self._var.copy_(var)
-        self._std.copy_(torch.sqrt(var.clamp_min(0.0)))
-        self.count.add_(batch_count)
-        self._ema_count.copy_(effective_count)
+        if self.until is not None and self.count.is_cuda:
+            active = self.count < self.until
+            self._mean.copy_(torch.where(active, mean, self._mean))
+            self._var.copy_(torch.where(active, var, self._var))
+            self._std.copy_(torch.where(active, torch.sqrt(var.clamp_min(0.0)), self._std))
+            self.count.add_(batch_count * active)
+            self._ema_count.copy_(torch.where(active, effective_count, self._ema_count))
+        else:
+            self._mean.copy_(mean)
+            self._var.copy_(var)
+            self._std.copy_(torch.sqrt(var.clamp_min(0.0)))
+            self.count.add_(batch_count)
+            self._ema_count.copy_(effective_count)
 
     def _load_from_state_dict(
         self,

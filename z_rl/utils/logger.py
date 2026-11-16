@@ -60,6 +60,8 @@ class Logger:
 
         # Create buffers
         self.ep_extras = []
+        self._deferred_episodes = []
+        self._deferred_extras = {}
         self.rewbuffer = deque(maxlen=100)
         self.lenbuffer = deque(maxlen=100)
         self.cur_reward_sum = torch.zeros(self.num_envs, dtype=torch.float, device=self.device)
@@ -116,6 +118,9 @@ class Logger:
         extras: dict,
     ) -> None:
         """Add metrics from the environment step to the buffers."""
+        if self.writer is not None and self.cfg.get("defer_env_logs", False):
+            self._defer_env_step(rewards, dones, extras)
+            return
         if self.writer is not None:
             # Update rewards and episode length
             self.cur_reward_sum += rewards
@@ -144,6 +149,47 @@ class Logger:
                     }
                 self.ep_extras.append(ep_info)
 
+    def _defer_env_step(self, rewards, dones, extras):
+        self.cur_reward_sum += rewards
+        self.cur_episode_length += 1
+        done = dones.squeeze(-1) > 0
+        self._deferred_episodes.append(torch.stack((self.cur_reward_sum, self.cur_episode_length, done)))
+        self.cur_reward_sum.mul_(~done)
+        self.cur_episode_length.mul_(~done)
+        ep_info = extras.get("episode", extras.get("log", {}))
+        if extras.get("log_on_done") and ep_info:
+            # All deferred manager metrics have one scalar per environment. Reduce
+            # them together instead of launching reductions separately for each key.
+            keys = tuple(ep_info)
+            if not hasattr(self, "_deferred_scales"):
+                self._deferred_scales = torch.tensor([extras.get("log_scale", {}).get(key, 1.0) for key in keys], device=self.device)
+            values = torch.stack([value.detach().reshape(self.num_envs) for value in ep_info.values()])
+            total = (values * done).sum(-1) * self._deferred_scales
+            count = done.sum().expand_as(total)
+            if keys not in self._deferred_extras:
+                self._deferred_extras[keys] = torch.zeros((len(keys), 2), device=self.device)
+            self._deferred_extras[keys].add_(torch.stack((total, count), -1))
+        else:
+            for key, value in ep_info.items():
+                value = torch.as_tensor(value, device=self.device).detach()
+                if (key,) not in self._deferred_extras:
+                    self._deferred_extras[(key,)] = torch.zeros((1, 2), device=self.device)
+                self._deferred_extras[(key,)].add_(torch.stack((value.sum(), value.new_tensor(value.numel()))))
+
+    def _flush_env_steps(self):
+        if not self._deferred_episodes:
+            return
+        episodes = torch.stack(self._deferred_episodes).cpu()
+        completed = episodes[:, 2].bool()
+        self.rewbuffer.extend(episodes[:, 0][completed].tolist())
+        self.lenbuffer.extend(episodes[:, 1][completed].tolist())
+        if self._deferred_extras:
+            keys = [key for group in self._deferred_extras for key in group]
+            totals = torch.cat(list(self._deferred_extras.values())).cpu()
+            self.ep_extras.append({key: total / count for key, (total, count) in zip(keys, totals) if count > 0})
+        self._deferred_episodes.clear()
+        self._deferred_extras.clear()
+
     def log(
         self,
         it: int,
@@ -163,6 +209,7 @@ class Logger:
 
         If videos are available, they are uploaded to the logging service as well.
         """
+        self._flush_env_steps()
         if self.writer is not None:
             if collection_size is None:
                 collection_size = self.cfg["num_steps_per_env"] * self.num_envs * self.gpu_world_size

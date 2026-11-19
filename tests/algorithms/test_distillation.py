@@ -197,11 +197,11 @@ class TestDistillationMixedPrecision:
         assert any(not torch.equal(b, a) for b, a in zip(before, after)), "student params should change"
 
 
-def test_use_muon_builds_split_optimizer_for_student_only() -> None:
+def test_muon_adamw_builds_split_optimizer_for_student_only() -> None:
     if not hasattr(torch.optim, "Muon"):
         return
 
-    alg, _obs, _storage = _make_distillation_setup(use_muon=True, muon_adamw_weight_decay=0.123)
+    alg, _obs, _storage = _make_distillation_setup(optimizer="muon_adamw", muon_adamw_weight_decay=0.123)
     optimized = {id(param) for group in alg.optimizer.param_groups for param in group["params"]}
     student_ids = {id(param) for param in alg.student.parameters() if param.requires_grad}
     teacher_ids = {id(param) for param in alg.teacher.parameters()}

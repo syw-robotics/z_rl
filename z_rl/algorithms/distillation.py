@@ -76,7 +76,7 @@ class Distillation:
         max_grad_norm: float | None = None,
         loss_type: str = "mse",
         optimizer: str = "adam",
-        use_muon: bool = False,  # Muon for hidden 2-D weights; AdamW for biases/heads (see utils.opt)
+        use_muon: bool = False,  # Legacy override for optimizer="muon_adamw".
         muon_adamw_weight_decay: float = 0.01,
         use_mixed_precision: bool = False,
         student_stochastic_output: bool = False,

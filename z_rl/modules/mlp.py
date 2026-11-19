@@ -48,8 +48,8 @@ class MLP(nn.Sequential):
             last_activation: Activation function of the last layer. None results in a linear last layer.
             layer_norm: Position of LayerNorm relative to the activation function in each hidden layer. None disables
                 LayerNorm.
-            first_non_muon: If True, keep the input linear layer on AdamW when ``use_muon=True``.
-            last_non_muon: If True, keep the output linear layer on AdamW when ``use_muon=True``.
+            first_non_muon: If True, keep the input linear layer on AdamW with the Muon + AdamW optimizer.
+            last_non_muon: If True, keep the output linear layer on AdamW with the Muon + AdamW optimizer.
                 Muon is intended for hidden 2-D weights; input/output heads are usually excluded.
 
         Raises:
@@ -104,7 +104,7 @@ class MLP(nn.Sequential):
         for idx, layer in enumerate(layers):
             self.add_module(f"{idx}", layer)
 
-        # MuonAdamWWrapper reads ``_non_muon`` to route 2-D weights away from Muon.
+        # build_optimizer uses this marker to keep selected 2-D weights on AdamW.
         linear_layers = [layer for layer in layers if isinstance(layer, nn.Linear)]
         if first_non_muon and len(linear_layers) > 0:
             linear_layers[0].weight._non_muon = True

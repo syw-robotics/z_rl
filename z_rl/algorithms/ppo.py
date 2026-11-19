@@ -58,7 +58,7 @@ class PPO:
         learning_rate: float = 0.001,
         max_grad_norm: float = 1.0,
         optimizer: str = "adam",
-        use_muon: bool = False,  # Muon for hidden 2-D weights; AdamW for biases/heads/std (see utils.opt)
+        use_muon: bool = False,  # Legacy override for optimizer="muon_adamw".
         muon_adamw_weight_decay: float = 0.01,
         use_clipped_value_loss: bool = True,
         schedule: str = "adaptive",
@@ -113,7 +113,6 @@ class PPO:
         self._raw_actor = self.actor
         self._raw_critic = self.critic
 
-        # Hidden 2-D weights use Muon when use_muon=True; biases, std, and input/output layers stay on AdamW.
         self.optimizer = build_optimizer(
             [self.actor, self.critic],
             learning_rate=learning_rate,

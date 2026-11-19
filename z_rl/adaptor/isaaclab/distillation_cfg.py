@@ -36,19 +36,14 @@ class ZRlDistillationAlgorithmCfg:
     max_grad_norm: None | float = None
     """The maximum norm the gradient is clipped to. Defaults to None."""
 
-    optimizer: Literal["adam", "adamw", "sgd", "rmsprop"] = "adam"
-    """The optimizer to use for the student policy. Defaults to adam."""
+    optimizer: Literal["adam", "adamw", "sgd", "rmsprop", "muon_adamw"] = "adam"
+    """Optimizer for the student. ``"muon_adamw"`` splits eligible 2-D weights from the remaining parameters."""
 
     use_muon: bool = False
-    """Whether to use Muon+AdamW instead of a single optimizer. Defaults to False.
-
-    Muon is intended for hidden 2-D weight matrices only. Biases, normalization parameters,
-    policy std heads, and input/output linear layers remain on AdamW. Requires a PyTorch build
-    that provides ``torch.optim.Muon`` (approximately 2.9+). When enabled, ``optimizer`` is ignored.
-    """
+    """Legacy flag. When True, selects ``"muon_adamw"`` regardless of ``optimizer``."""
 
     muon_adamw_weight_decay: float = 0.01
-    """AdamW weight decay used by the non-Muon parameter group when ``use_muon`` is enabled."""
+    """Weight decay for the AdamW group in ``"muon_adamw"``."""
 
     loss_type: Literal["mse", "huber"] = "mse"
     """The loss type to use for the student policy. Defaults to mse."""

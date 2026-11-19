@@ -129,7 +129,7 @@ def test_symmetry_augmentation_is_the_authoritative_rollout_switch() -> None:
 def test_muon_adamw_weight_decay_is_forwarded() -> None:
     if not hasattr(torch.optim, "Muon"):
         return
-    ppo, _ = _build_ppo(use_muon=True, muon_adamw_weight_decay=0.123)
+    ppo, _ = _build_ppo(optimizer="muon_adamw", muon_adamw_weight_decay=0.123)
     adamw = next(optimizer for optimizer in ppo.optimizer.optimizers if isinstance(optimizer, torch.optim.AdamW))
 
     assert adamw.defaults["weight_decay"] == 0.123

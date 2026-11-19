@@ -13,10 +13,17 @@ from copy import deepcopy
 import torch
 from z_rl.storage.sequence_replay import SequenceReplayBuffer
 from z_rl.utils import resolve_class
+from z_rl.utils.cuda_graph import (
+    GraphedUpdate,
+    clip_grad_norm,
+    graph_config,
+    graph_state,
+    make_capturable,
+    set_learning_rate,
+)
 from z_rl.utils.logger import Logger
 from z_rl.utils.onnx_export import export_to_onnx
 from z_rl.utils.opt import build_optimizer
-from z_rl.utils.cuda_graph import GraphedUpdate, graph_state, graph_config, clip_grad_norm, make_capturable, set_learning_rate
 
 
 class ModelBasedRunner:
@@ -65,12 +72,15 @@ class ModelBasedRunner:
             ckpt = torch.load(self.wm_cfg["checkpoint"], map_location=device, weights_only=False)
             self._check_task_metadata(ckpt)
             self.world_model.load_state_dict(ckpt["world_model_state_dict"])
-        self.world_model.requires_grad_(self.wm_trainable)
-        self.world_model.train(self.wm_trainable)
+        # Build the same optimizer groups for training and frozen checkpoint loads.
+        self.world_model.requires_grad_(True)
         self.wm_optimizer = build_optimizer(
             [self.world_model], learning_rate=self.wm_cfg["learning_rate"],
+            optimizer=self.wm_cfg.get("optimizer", "adam"),
             use_muon=self.wm_cfg.get("use_muon", False), muon_adamw_weight_decay=0.0,
         )
+        self.world_model.requires_grad_(self.wm_trainable)
+        self.world_model.train(self.wm_trainable)
         for group in self.wm_optimizer.param_groups:
             group["weight_decay"] = 0.0
         self.replay = SequenceReplayBuffer(train_cfg["replay_capacity_steps"], env.num_envs, device)
@@ -89,31 +99,55 @@ class ModelBasedRunner:
         )
 
         self.batch_wm_updates = self.wm_cfg.get("batch_updates", False)
-        if train_cfg.get("capture_updates", False):
-            if torch.device(device).type != "cuda":
-                raise ValueError("capture_updates requires a CUDA training device")
+        capture_updates = train_cfg.get("capture_updates", False)
+        capture_world_model = train_cfg.get("capture_world_model_updates")
+        capture_policy = train_cfg.get("capture_policy_updates")
+        self.capture_world_model_updates = self.wm_trainable and (
+            capture_updates if capture_world_model is None else capture_world_model
+        )
+        self.capture_policy_updates = capture_updates if capture_policy is None else capture_policy
+        self._configure_capture()
+
+    def _configure_capture(self):
+        if (self.capture_world_model_updates or self.capture_policy_updates) and torch.device(self.device).type != "cuda":
+            raise ValueError("capture_updates requires a CUDA training device")
+        if self.capture_policy_updates:
             validate_capture = getattr(self.alg, "validate_capture", None)
             if validate_capture is not None:
                 validate_capture()
-            # Sampling stays outside capture; each call copies fresh tensors into stable buffers.
+
+        self._prepare_capture_optimizers()
+        if self.capture_world_model_updates:
+            if self.batch_wm_updates:
+                self._update_world_models = self._capture_world_model(self._update_world_models)
+            else:
+                self._update_world_model = self._capture_world_model(self._update_world_model)
+        if self.capture_policy_updates:
+            def modules():
+                return [self.actor, self.critic, self.world_model, self.task]
+
+            def optimizers():
+                return [self.alg.actor_optimizer, self.alg.critic_optimizer]
+
+            self._update_policy = GraphedUpdate(
+                self._update_policy,
+                state=lambda: graph_state(modules(), optimizers()),
+                config=lambda: graph_config([self.alg, *modules()], optimizers()),
+            )
+
+    def _capture_world_model(self, update):
+        return GraphedUpdate(
+            update,
+            state=lambda: graph_state([self.world_model], [self.wm_optimizer]),
+            config=lambda: graph_config([self.world_model], [self.wm_optimizer]),
+        )
+
+    def _prepare_capture_optimizers(self):
+        if self.capture_world_model_updates:
             self.wm_optimizer = make_capturable(self.wm_optimizer)
+        if self.capture_policy_updates:
             self.alg.actor_optimizer = make_capturable(self.alg.actor_optimizer)
             self.alg.critic_optimizer = make_capturable(self.alg.critic_optimizer)
-            wm_state = lambda: graph_state([self.world_model], [self.wm_optimizer])
-            policy_state = lambda: graph_state(
-                [self.actor, self.critic, self.world_model, self.task],
-                [self.alg.actor_optimizer, self.alg.critic_optimizer],
-            )
-            wm_config = lambda: graph_config([self.world_model], [self.wm_optimizer])
-            policy_config = lambda: graph_config(
-                [self.alg, self.actor, self.critic, self.world_model, self.task],
-                [self.alg.actor_optimizer, self.alg.critic_optimizer],
-            )
-            if self.batch_wm_updates:
-                self._update_world_models = GraphedUpdate(self._update_world_models, wm_state, wm_config)
-            else:
-                self._update_world_model = GraphedUpdate(self._update_world_model, wm_state, wm_config)
-            self._update_policy = GraphedUpdate(self._update_policy, policy_state, policy_config)
 
     @torch.no_grad()
     def collect(self, steps):
@@ -255,6 +289,11 @@ class ModelBasedRunner:
         checkpoint = torch.load(path, map_location=map_location or self.device, weights_only=False)
         if checkpoint.get("format_version") != 1:
             raise ValueError("Expected a ModelBasedRunner checkpoint")
+        if self.training:
+            self._check_task_metadata(checkpoint)
+            for update in (self._update_world_model, self._update_world_models, self._update_policy):
+                if isinstance(update, GraphedUpdate):
+                    update.invalidate()
         actor_state = (
             checkpoint.get("actor_training_state_dict", checkpoint["actor_state_dict"])
             if self.training else checkpoint["actor_state_dict"]
@@ -264,19 +303,12 @@ class ModelBasedRunner:
             if self.actor_ema is not None:
                 self.actor_ema.load_state_dict(checkpoint["actor_state_dict"], strict=strict)
                 self._actor_ema_updates = checkpoint.get("actor_ema_updates", 1)
-            self._check_task_metadata(checkpoint)
             self.critic.load_state_dict(checkpoint["critic_state_dict"], strict=strict)
             self.world_model.load_state_dict(checkpoint["world_model_state_dict"], strict=strict)
             self.alg.actor_optimizer.load_state_dict(checkpoint["actor_optimizer_state_dict"])
             self.alg.critic_optimizer.load_state_dict(checkpoint["critic_optimizer_state_dict"])
             self.wm_optimizer.load_state_dict(checkpoint["world_model_optimizer_state_dict"])
-            if self.cfg.get("capture_updates", False):
-                self.wm_optimizer = make_capturable(self.wm_optimizer)
-                self.alg.actor_optimizer = make_capturable(self.alg.actor_optimizer)
-                self.alg.critic_optimizer = make_capturable(self.alg.critic_optimizer)
-                for update in (self._update_world_model, self._update_world_models, self._update_policy):
-                    if isinstance(update, GraphedUpdate):
-                        update.invalidate()
+            self._prepare_capture_optimizers()
         self.current_learning_iteration = checkpoint["iter"]
         self.sim_steps = checkpoint.get("sim_steps", 0)
         self.logger.tot_timesteps = self.sim_steps

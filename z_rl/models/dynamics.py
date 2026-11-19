@@ -55,6 +55,7 @@ class LocalResidualDynamics(nn.Module):
         self.input_normalization = input_normalization
         width = 10 + 2 * num_joints + action_dim + context_dim
         self.input_norm = EmpiricalNormalization(width)
+        # Keep all dynamics weight matrices eligible for Muon, including the input and output layers.
         self.net = MLP(width, 12 + 2 * num_joints, hidden_dims, activation, layer_norm=layer_norm)
         output = [layer for layer in self.net.modules() if isinstance(layer, nn.Linear)][-1]
         nn.init.zeros_(output.weight)

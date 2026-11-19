@@ -7,11 +7,12 @@
 
 from __future__ import annotations
 
+import pytest
 import torch
 import torch.nn as nn
 
 from z_rl.modules import MLP
-from z_rl.utils.opt import MuonAdamWWrapper, OptimizerGroup, build_optimizer
+from z_rl.utils.opt import OptimizerGroup, build_optimizer
 
 
 class _TinyModel(nn.Module):
@@ -60,15 +61,43 @@ def test_optimizer_group_updates_learning_rates_after_loading_state() -> None:
     torch.testing.assert_close(second, torch.tensor([0.98]))
 
 
-def test_muon_adamw_wrapper_splits_parameters() -> None:
-    if not hasattr(torch.optim, "Muon"):
-        return
-
+@pytest.mark.skipif(not hasattr(torch.optim, "Muon"), reason="PyTorch Muon required")
+def test_build_optimizer_splits_muon_and_adamw_parameters() -> None:
     model = _TinyModel()
-    wrapper = MuonAdamWWrapper([model], lr=1e-3)
-    state = wrapper.state_dict()
+    layers = [layer for layer in model.net if isinstance(layer, nn.Linear)]
+    optimizer = build_optimizer([model], learning_rate=1e-3, optimizer="muon_adamw")
+    muon, adamw = optimizer.optimizers
 
-    assert len(state["optimizers"]) == 2
+    assert isinstance(muon, torch.optim.Muon)
+    assert isinstance(adamw, torch.optim.AdamW)
+    assert muon.param_groups[0]["params"][0] is layers[1].weight
+    assert set(adamw.param_groups[0]["params"]) == set(model.parameters()) - {layers[1].weight}
+
+    state = optimizer.state_dict()
+    state["class"] = "MuonAdamWWrapper"
+    optimizer.load_state_dict(state)
+
+
+def test_optimizer_group_rejects_mismatched_checkpoint_before_loading_any_part() -> None:
+    first = nn.Parameter(torch.ones(1))
+    second = nn.Parameter(torch.ones(1))
+    group = OptimizerGroup([
+        torch.optim.SGD([first], lr=0.1),
+        torch.optim.SGD([second], lr=0.2),
+    ])
+
+    with pytest.raises(ValueError, match="optimizers"):
+        group.load_state_dict(group.optimizers[0].state_dict())
+
+    checkpoint = group.state_dict()
+    with pytest.raises(ValueError, match="checkpoint has 1 optimizers"):
+        group.load_state_dict({"optimizers": checkpoint["optimizers"][:1]})
+
+    checkpoint["optimizers"][0]["param_groups"][0]["lr"] = 0.5
+    checkpoint["optimizers"][1]["param_groups"][0]["params"] = [0, 1]
+    with pytest.raises(ValueError, match="parameter groups do not match"):
+        group.load_state_dict(checkpoint)
+    assert group.param_groups[0]["lr"] == 0.1
 
 
 def test_build_optimizer_uses_named_optimizer() -> None:
@@ -93,6 +122,6 @@ def test_build_optimizer_use_muon_ignores_named_optimizer() -> None:
     )
     adamw = next(item for item in optimizer.optimizers if isinstance(item, torch.optim.AdamW))
 
-    assert isinstance(optimizer, MuonAdamWWrapper)
+    assert isinstance(optimizer, OptimizerGroup)
     assert not any(isinstance(item, torch.optim.SGD) for item in optimizer.optimizers)
     assert adamw.defaults["weight_decay"] == 0.05

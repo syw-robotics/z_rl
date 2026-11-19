@@ -247,7 +247,7 @@ class MLPModel(nn.Module):
         """Build the output head that consumes the model latent.
         This is a simple MLP network.
         """
-        # When use_muon=True, hidden layers use Muon; input/output linear layers stay on AdamW.
+        # Keep the input and output layers on AdamW when using Muon + AdamW.
         return MLP(
             input_dim,
             output_dim,

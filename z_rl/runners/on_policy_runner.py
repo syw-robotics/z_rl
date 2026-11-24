@@ -9,20 +9,26 @@ from __future__ import annotations
 import os
 import time
 import torch
+from typing import Union
 
-from z_rl.algorithms import PPO
+from z_rl.algorithms import PPO, SAC
 from z_rl.env import VecEnv
 from z_rl.models import MLPModel
 from z_rl.utils import check_nan, resolve_callable
 from z_rl.utils.logger import Logger
 from z_rl.utils.onnx_export import export_to_onnx
 
+OnPolicyAlgo = Union[PPO, SAC]  # Using Union due to Python <3.10
+"""Type alias for the On Policy RL algorithms. """
+
 
 class OnPolicyRunner:
-    """On-policy runner for reinforcement learning algorithms."""
+    """Vectorized collection and update loop shared by PPO and SAC."""
 
-    alg: PPO
+    alg: OnPolicyAlgo
     """The actor-critic algorithm."""
+
+    _log_policy_diagnostics = True
 
     def __init__(self, env: VecEnv, train_cfg: dict, log_dir: str | None = None, device: str = "cpu") -> None:
         """Construct the runner, algorithm, and logging stack."""
@@ -36,8 +42,6 @@ class OnPolicyRunner:
         print("[OnPolicyRunner] obs_format: ", getattr(self.env, "obs_format", None))
         # the belows are for debugging observation infos
         #  print("[OnPolicyRunner] obs_group_time_slice_map: ", self.env.obs_group_time_slice_map)
-        #  print("[OnPolicyRunner] obs_group_layout_mode_map: ", self.env.obs_group_layout_mode_map)
-        #  print("[OnPolicyRunner] dict_obs_group_names: ", self.env._dict_obs_group_names)
 
         # Setup multi-GPU training if enabled
         self._configure_multi_gpu()
@@ -46,7 +50,7 @@ class OnPolicyRunner:
         obs = self.env.get_observations()
 
         # Create the algorithm
-        alg_class: type[PPO] = resolve_callable(self.cfg["algorithm"]["class_name"])  # type: ignore
+        alg_class: OnPolicyAlgo = resolve_callable(self.cfg["algorithm"]["class_name"])  # type: ignore
         self.alg = alg_class.construct_algorithm(obs, self.env, self.cfg, self.device)
 
         # Create the logger
@@ -60,6 +64,9 @@ class OnPolicyRunner:
             gpu_global_rank=self.gpu_global_rank,
             device=self.device,
         )
+
+        command_metric_compute = getattr(self.env, "make_command_metric_compute_function", None)
+        self.compute_command_metrics = command_metric_compute() if command_metric_compute is not None else None
 
         self.current_learning_iteration = 0
         self.checkpoint_infos: dict = {}
@@ -120,8 +127,23 @@ class OnPolicyRunner:
             learn_time = stop - start
             self.current_learning_iteration = it
 
-            # Log information
-            self.print_log_info(it, start_it, total_it, collect_time, learn_time, loss_dict)
+            # Log training metrics
+            if ( self.logger.writer is not None
+                and self.compute_command_metrics is not None
+                and (it + 1) % self.cfg.get("compute_command_metric_interval", 10) == 0
+            ):
+                # compute metrics from the state after the last environment step of this rollout.
+                self.logger.ep_extras.append(self.compute_command_metrics())
+            self.logger.log(
+                it=it,
+                start_it=start_it,
+                total_it=total_it,
+                collect_time=collect_time,
+                learn_time=learn_time,
+                loss_dict=loss_dict,
+                learning_rate=self.alg.learning_rate,
+                action_std=self.alg.get_policy().output_std,
+            )
 
             # Save model
             if self.logger.writer is not None and it % self.cfg["save_interval"] == 0:
@@ -197,18 +219,6 @@ class OnPolicyRunner:
     def add_git_repo_to_log(self, repo_file_path: str) -> None:
         """Register a repository path whose git status should be logged."""
         self.logger.git_status_repos.append(repo_file_path)
-
-    def print_log_info(self, it: int, start_it: int, total_it: int, collect_time: float, learn_time: float, loss_dict: dict) -> None:
-        self.logger.log(
-            it=it,
-            start_it=start_it,
-            total_it=total_it,
-            collect_time=collect_time,
-            learn_time=learn_time,
-            loss_dict=loss_dict,
-            learning_rate=self.alg.learning_rate,
-            action_std=self.alg.get_policy().output_std,
-        )
 
     def _configure_multi_gpu(self) -> None:
         """Configure multi-gpu training."""

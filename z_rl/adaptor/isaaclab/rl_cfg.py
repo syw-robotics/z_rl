@@ -525,18 +525,9 @@ class ZRlBaseRunnerCfg:
     .. note::
         This clipping is performed inside the :class:`ZRlVecEnvWrapper` wrapper.
     """
-
-    obs_group_concat_mode: Literal["term_major", "history_major"] = "term_major"
-    """Concatenation layout for dict-based observation groups. Defaults to ``"term_major"``.
-
-    - ``"term_major"``: Concatenate each term as-is in term order (Isaac Lab default layout).
-    - ``"history_major"``: Reorder compatible vector history terms into a history-major flat layout.
-
-    .. note::
-        ``"history_major"`` only applies to compatible dict observation groups and requires
-        ``concatenate_terms=False`` in Isaac Lab's observation group configuration.
-        Incompatible groups will fall back to term-major behavior.
-    """
+    
+    compute_command_metric_interval: int = 10
+    """The number of iterations between computing the command metric."""
 
     check_for_nan: bool = False
     """Whether to check for NaN values coming from the environment."""

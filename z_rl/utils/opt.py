@@ -87,17 +87,20 @@ def build_optimizer(
     optimizer: str = "adam",
     use_muon: bool = False,
     muon_adamw_weight_decay: float = 0.01,
+    weight_decay: float | None = None,
 ) -> torch.optim.Optimizer:
     """Use the named optimizer, or split trainable parameters between Muon and AdamW.
 
     With ``optimizer="muon_adamw"``, Muon takes 2-D parameters unless the model marks them
-    with ``_non_muon``. The legacy ``use_muon=True`` flag still overrides the optimizer name.
+    with ``_non_muon``. ``weight_decay`` applies to the named optimizer or the Muon half
+    of the split. The AdamW half uses ``muon_adamw_weight_decay``. The legacy ``use_muon=True`` flag still overrides the optimizer name.
     """
     if use_muon:
         optimizer = "muon_adamw"
     params = chain.from_iterable(module.parameters() for module in modules)
+    decay = {} if weight_decay is None else {"weight_decay": weight_decay}
     if optimizer.lower() != "muon_adamw":
-        return resolve_optimizer(optimizer)(params, lr=learning_rate)
+        return resolve_optimizer(optimizer)(params, lr=learning_rate, **decay)
     if not hasattr(torch.optim, "Muon"):
         raise RuntimeError('optimizer="muon_adamw" requires a PyTorch build with torch.optim.Muon.')
 
@@ -115,7 +118,7 @@ def build_optimizer(
 
     optimizers: list[torch.optim.Optimizer] = []
     if muon_params:
-        optimizers.append(torch.optim.Muon(muon_params, lr=learning_rate, adjust_lr_fn="match_rms_adamw"))
+        optimizers.append(torch.optim.Muon(muon_params, lr=learning_rate, adjust_lr_fn="match_rms_adamw", **decay))
     if adamw_params:
         optimizers.append(
             torch.optim.AdamW(adamw_params, lr=learning_rate, weight_decay=muon_adamw_weight_decay, fused=True)

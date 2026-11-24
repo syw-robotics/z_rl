@@ -23,14 +23,17 @@ from z_rl.extensions import (
 from z_rl.storage import RolloutStorage
 
 
-def test_tensor_mirror_spec_applies_and_is_involutive() -> None:
+@pytest.mark.parametrize("dtype", [torch.float32, torch.bfloat16])
+def test_tensor_mirror_spec_applies_and_is_involutive(dtype: torch.dtype) -> None:
     spec = TensorMirrorSpec([1, 0, 2], [-1.0, -1.0, 1.0], name="test")
-    value = torch.tensor([[1.0, 2.0, 3.0]])
+    value = torch.tensor([[1.0, 2.0, 3.0]], dtype=dtype, requires_grad=True)
 
     mirrored = spec(value)
 
-    assert torch.equal(mirrored, torch.tensor([[-2.0, -1.0, 3.0]]))
+    torch.testing.assert_close(mirrored, torch.tensor([[-2.0, -1.0, 3.0]]))
     assert torch.equal(spec(mirrored), value)
+    mirrored.sum().backward()
+    torch.testing.assert_close(value.grad, torch.tensor([[-1.0, -1.0, 1.0]], dtype=dtype))
 
 
 @pytest.mark.parametrize(
@@ -57,14 +60,14 @@ def test_build_obs_group_mirror_spec_term_major_history() -> None:
         obs_format,
         "policy",
         term_specs,
-        layout_mode="term_major",
+        time_major=False,
     )
 
     assert spec.index.tolist() == [1, 0, 3, 2, 4]
     assert spec.sign.tolist() == [1.0, 1.0, 1.0, 1.0, -1.0]
 
 
-def test_build_obs_group_mirror_spec_history_major() -> None:
+def test_build_obs_group_mirror_spec_time_major() -> None:
     obs_format = {"policy": {"joint": (2, 2), "clock": (2, 1)}}
     term_specs = {
         "joint": TensorMirrorSpec([1, 0]),
@@ -75,7 +78,7 @@ def test_build_obs_group_mirror_spec_history_major() -> None:
         obs_format,
         "policy",
         term_specs,
-        layout_mode="history_major",
+        time_major=True,
     )
 
     assert spec.index.tolist() == [1, 0, 2, 4, 3, 5]
@@ -90,7 +93,7 @@ def test_build_obs_group_mirror_spec_requires_every_term() -> None:
             obs_format,
             "policy",
             {"known": TensorMirrorSpec([0])},
-            layout_mode="term_major",
+            time_major=False,
         )
 
 

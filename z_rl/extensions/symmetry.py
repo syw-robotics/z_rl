@@ -39,7 +39,10 @@ class TensorMirrorSpec(nn.Module):
         self.register_buffer("sign", sign_tensor)
 
     def forward(self, tensor: torch.Tensor) -> torch.Tensor:
-        return tensor.index_select(-1, self.index) * self.sign
+        mirrored = tensor.index_select(-1, self.index)
+        if mirrored.dtype == self.sign.dtype:
+            return mirrored.mul_(self.sign)
+        return mirrored * self.sign
 
     def __len__(self) -> int:
         return self.index.numel()
@@ -83,7 +86,7 @@ def build_obs_group_mirror_spec(
     group_name: str,
     term_specs: Mapping[str, TensorMirrorSpec],
     *,
-    layout_mode: str,
+    time_major: bool,
 ) -> TensorMirrorSpec:
     """Expand per-frame term specs into a flattened observation-group spec."""
     term_formats = obs_format[group_name]
@@ -105,19 +108,16 @@ def build_obs_group_mirror_spec(
         resolved_specs.append(term_spec)
         histories.append(history_length)
 
-    if layout_mode == "term_major":
-        # Each term stores all of its history frames contiguously before the next term.
-        expanded = [spec.repeat(history) for spec, history in zip(resolved_specs, histories)]
-        return TensorMirrorSpec.cat(expanded, name=group_name)
-    if layout_mode == "history_major":
+    if time_major:
         if len(set(histories)) != 1:
             raise ValueError(
-                f"History-major observation group '{group_name}' requires a common history length; got {histories}."
+                f"Time-major observation group '{group_name}' requires a common history length; got {histories}."
             )
         # A full frame is concatenated first, then repeated for every history step.
         frame_spec = TensorMirrorSpec.cat(resolved_specs, name=f"{group_name}:frame")
         return frame_spec.repeat(histories[0], name=group_name)
-    raise ValueError(f"Unsupported observation layout mode '{layout_mode}'.")
+    expanded = [spec.repeat(history) for spec, history in zip(resolved_specs, histories)]
+    return TensorMirrorSpec.cat(expanded, name=group_name)
 
 
 class Symmetry:

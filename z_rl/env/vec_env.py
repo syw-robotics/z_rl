@@ -85,6 +85,10 @@ class VecEnv(ABC):
                happen due to time limits and not due to the environment reaching a terminal state. This is useful
                for environments that have a fixed episode length.
 
+            - "time_outs_obs" (optional): Full batch of pre-reset observation groups in the same layout as
+              observations. SAC uses the rows selected by "time_outs" to bootstrap truncated episodes.
+              An optional "terminated" mask takes precedence when both flags are set.
+
             - "log" (dict[str, float | torch.Tensor]): Additional information for logging and debugging purposes.
                The key should be a string and start with "/" for namespacing. The value can be a scalar or a
                tensor. If it is a tensor, the mean of the tensor is used for logging.

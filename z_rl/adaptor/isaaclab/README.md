@@ -13,13 +13,9 @@ It currently provides:
 ## Quick start
 
 ```python
-from isaaclab_rl.z_rl import ZRlVecEnvWrapper
+from z_rl.adaptor.isaaclab import ZRlVecEnvWrapper
 
-env = ZRlVecEnvWrapper(
-    env,
-    clip_actions=1.0,
-    obs_group_concat_mode="term_major",  # or "history_major"
-)
+env = ZRlVecEnvWrapper(env, clip_actions=1.0)
 ```
 
 Notes:
@@ -41,161 +37,30 @@ At runtime it:
 - converts `(terminated, truncated)` into Z-RL-style `dones`
 - adds `extras["time_outs"] = truncated` for infinite-horizon tasks
 - returns observations as `TensorDict`
-- caches observation metadata such as `obs_format`, `obs_group_layout_mode_map`, and time-slice selectors
+- caches observation metadata such as `obs_format` and time-slice selectors
 
 Those caches metadata enables initializing obs selectors ( as `ObsSelector` objects from `z_rl.utils`), which let downstream code operates observation safer and lazier.
 
-## Observation groups and `concatenate_terms`
+## Observation history layout
 
-In IsaacLab, each observation group is controlled by `ObservationGroupCfg.concatenate_terms`.
-
-- `concatenate_terms=True`: IsaacLab already returns one tensor for that group
-- `concatenate_terms=False`: IsaacLab returns a term dictionary, for example:
+Configure the layout on the IsaacLab observation group. For a flat policy vector with one
+contiguous block per frame, set the following before creating the environment:
 
 ```python
-{
-    "policy": {
-        "base_lin_vel": ...,
-        "joint_pos": ...,
-    }
-}
+policy = env_cfg.observations.policy
+policy.history_length = 5
+policy.history_order = "time"
+policy.flatten_history_dim = True
+policy.concatenate_terms = True
+policy.concatenate_dim = -1
 ```
 
-`ZRlVecEnvWrapper` only needs to re-layout groups that come back as dictionaries. This is the key relationship:
+With two terms and two frames, `"time"` gives `[a0, b0, a1, b1]`. The default
+`"term"` gives `[a0, a1, b0, b1]`. The wrapper passes the manager's tensor through and
+uses its layout for time slicing and symmetry. Keep the training layout when loading a checkpoint.
 
-- if `concatenate_terms=True`, the wrapper does not reorder that group and `obs_group_concat_mode` has no effect on it
-- if `concatenate_terms=False`, the wrapper converts the dict group into a single tensor for Z-RL
-
-So, `obs_group_concat_mode` only matters for groups whose IsaacLab config sets `concatenate_terms=False`.
-
-## `term_major` vs `history_major`
-
-This is the most important part of the wrapper.
-
-Assume one observation group contains two terms:
-
-- `a`: single-frame dim `Da`
-- `b`: single-frame dim `Db`
-- both have history length `H`
-
-### `term_major`
-
-`term_major` keeps IsaacLab's default per-term history layout.
-
-Conceptually, the flattened order is:
-
-```text
-[a_t-H+1, a_t-H+2, ..., a_t, b_t-H+1, b_t-H+2, ..., b_t]
-```
-
-If each term is already flattened by IsaacLab to shape `(N, H * D)`, wrapper concatenation produces:
-
-```text
-(N, H*Da + H*Db)
-```
-
-This is the default mode and also the fallback mode.
-
-### `history_major`
-
-`history_major` first restores each term into `(N, H, D)` and then concatenates features inside the same time step.
-
-Conceptually, the flattened order becomes:
-
-```text
-[a_t-H+1, b_t-H+1, a_t-H+2, b_t-H+2, ..., a_t, b_t]
-```
-
-The final shape is:
-
-```text
-(N, H * (Da + Db))
-```
-
-This layout is useful when downstream code wants to slice "the last frame" or "all but the last frame" as contiguous blocks.
-
-## Exact relationship between `history_major` and `self.concatenate_terms`
-
-To actually get `history_major` for one observation group, all of the following must be true:
-
-1. In IsaacLab, that group must use `self.concatenate_terms = False`
-2. When creating the wrapper, `obs_group_concat_mode="history_major"`
-3. The group must be time-slice compatible:
-   - every term has the same non-zero history length
-   - every term is a vector per frame
-   - the group is returned as a dict, not already concatenated by IsaacLab
-
-If any of these conditions is not satisfied, the wrapper uses `term_major` for that group.
-
-That means:
-
-- `self.concatenate_terms=True` and `obs_group_concat_mode="history_major"` is not an error, but that group will still stay in IsaacLab's existing layout
-- `self.concatenate_terms=False` is necessary, but not sufficient; the term shapes and history lengths must also be compatible
-
-## Practical examples
-
-### Example 1: IsaacLab already concatenates terms
-
-IsaacLab config:
-
-```python
-self.concatenate_terms = True
-```
-
-Wrapper config:
-
-```python
-ZRlVecEnvWrapper(env, obs_group_concat_mode="history_major")
-```
-
-Result:
-
-- the group is already a tensor when it reaches the wrapper
-- the wrapper does not rebuild its layout
-- effective layout remains IsaacLab's original concatenation
-
-### Example 2: Dict group with default wrapper behavior
-
-IsaacLab config:
-
-```python
-self.concatenate_terms = False
-```
-
-Wrapper config:
-
-```python
-ZRlVecEnvWrapper(env, obs_group_concat_mode="term_major")
-```
-
-Result:
-
-- the wrapper concatenates terms in term order
-- history stays grouped inside each term
-
-### Example 3: Dict group with history-major layout
-
-IsaacLab config:
-
-```python
-self.concatenate_terms = False
-```
-
-Wrapper config:
-
-```python
-ZRlVecEnvWrapper(env, obs_group_concat_mode="history_major")
-```
-
-Compatible group result:
-
-- each term is viewed as `(N, H, D)`
-- terms are concatenated along feature dim inside each time step
-- output is flattened to `(N, H * sum(D_i))`
-
-Incompatible group result:
-
-- the wrapper silently falls back to `term_major` for that group
+For environments that return term dictionaries (`concatenate_terms=False`), the wrapper
+concatenates the terms in term order. Use the observation group settings above for frame order.
 
 ## Time slicing with cached selectors
 
@@ -208,19 +73,15 @@ The wrapper can precompute efficient selectors for compatible groups:
 Use the cached selector metadata exposed by the wrapper together with the utility helpers:
 
 ```python
-from z_rl.utils import resolve_obs_temporal_selector, select_obs_time_slice
+from z_rl.utils import resolve_obs_temporal_selector
 
 last_obs_selector = resolve_obs_temporal_selector("policy", "last", env.obs_group_time_slice_map)
 last_obs = last_obs_selector.select(obs)
 ```
 
-This is only available for groups where:
-
-- all terms share the same non-zero history length
-- each single frame is a vector
-
-For `history_major` groups, these slices are contiguous ranges.
-For compatible `term_major` groups, they may be index tensors because the latest frame pieces are interleaved by term block rather than stored contiguously.
+`last` selects the newest frame. `exclude_last` drops the newest frame and `exclude_first`
+drops the oldest, preserving the stored order of the remaining frames. Frame-major vectors use
+contiguous slices. Term-major vectors use cached indices for each term's history.
 
 ## Cached metadata exposed by the wrapper
 
@@ -228,27 +89,10 @@ Useful properties:
 
 - `obs_format`
   - structure: `{group_name: {term_name: (history_length, *single_frame_shape)}}`
-- `obs_group_layout_mode_map`
-  - actual layout used per group: `"term_major"` or `"history_major"`
 - `obs_group_time_slice_map`
   - cached selectors used by `resolve_obs_temporal_selector()`
 
 These properties are useful when model code needs to know how a flattened vector was assembled.
-
-## Recommended configuration
-
-Use `term_major` when:
-
-- you want the default IsaacLab-compatible layout
-- some groups are already concatenated in IsaacLab
-- history lengths differ across terms
-
-Use `history_major` when:
-
-- downstream code operates on frame-wise windows
-- you want cheap access to the latest frame or shifted history blocks
-- your target groups are configured with `concatenate_terms=False`
-- those groups contain vector terms with the same non-zero history length
 
 ## File overview
 

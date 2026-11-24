@@ -50,6 +50,7 @@ class IsaacLabSymmetryCompiler:
 
     def _compile_observation_specs(self) -> dict[str, TensorMirrorSpec]:
         observation_manager = self.base_env.observation_manager
+        group_time_major = getattr(observation_manager, "_group_obs_time_major", {})
         group_specs = {}
         for group_name in observation_manager.active_terms:
             term_specs = {}
@@ -79,7 +80,7 @@ class IsaacLabSymmetryCompiler:
                 self.env.obs_format,
                 group_name,
                 term_specs,
-                layout_mode=self.env.obs_group_layout_mode_map[group_name],
+                time_major=group_time_major.get(group_name, False),
             ).to(self.env.device)
         return group_specs
 

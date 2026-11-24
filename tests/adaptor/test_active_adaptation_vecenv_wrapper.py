@@ -215,6 +215,7 @@ def test_wrapper_maps_aa_transition_to_z_rl_contract() -> None:
     )
     torch.testing.assert_close(observations["policy"][0], torch.ones(4))
     torch.testing.assert_close(observations["policy"][1], torch.zeros(4))
+    torch.testing.assert_close(extras["time_outs_obs"]["policy"][1], torch.ones(4))
     assert set(extras["log"]) == {
         "Episode_Reward/loco/track_velocity",
         "Episode_Reward/loco/return",

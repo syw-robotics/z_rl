@@ -11,6 +11,7 @@ from tensordict import TensorDict
 import pytest
 
 from z_rl.storage import RolloutStorage
+from z_rl.utils import unpad_trajectories
 from tests.conftest import make_obs
 
 NUM_ENVS = 6
@@ -74,34 +75,42 @@ def _fill_with_identifiable_data(storage: RolloutStorage, obs: TensorDict) -> di
     return stored
 
 
+@pytest.mark.parametrize("recurrent", [False, True])
+@pytest.mark.parametrize("num_batches", [3, 5])
+def test_each_epoch_visits_every_transition(recurrent: bool, num_batches: int) -> None:
+    """Every transition appears once per epoch, including uneven partitions."""
+    storage, obs = _make_storage_and_obs()
+    _fill_with_identifiable_data(storage, obs)
+    ids = torch.arange(NUM_STEPS * NUM_ENVS).reshape(NUM_STEPS, NUM_ENVS)
+    storage.actions[..., 0] = ids
+    storage.observations["policy"][..., 0] = ids
+    storage.dones[2, -1] = 1
+
+    generate = storage.recurrent_mini_batch_generator if recurrent else storage.mini_batch_generator
+    batches = generate(num_batches, num_epochs=2)
+    for _ in range(2):
+        seen = []
+        for _ in range(num_batches):
+            batch = next(batches)
+            obs = unpad_trajectories(batch.observations, batch.masks) if recurrent else batch.observations
+            torch.testing.assert_close(obs["policy"][..., 0], batch.actions[..., 0])
+            seen.append(batch.actions[..., 0].flatten())
+        torch.testing.assert_close(torch.cat(seen).long().sort().values, ids.flatten())
+
+
+@pytest.mark.parametrize("recurrent", [False, True])
+@pytest.mark.parametrize("count", ["zero", "excess"])
+def test_invalid_minibatch_count(recurrent: bool, count: str) -> None:
+    """Reject counts that would produce an empty partition."""
+    storage, _ = _make_storage_and_obs()
+    generate = storage.recurrent_mini_batch_generator if recurrent else storage.mini_batch_generator
+    limit = NUM_ENVS if recurrent else NUM_STEPS * NUM_ENVS
+    with pytest.raises(ValueError, match="num_mini_batches"):
+        next(generate(0 if count == "zero" else limit + 1, num_epochs=1))
+
+
 class TestMiniBatchGenerator:
     """Tests for ``mini_batch_generator`` data completeness."""
-
-    def test_all_transitions_visited_in_one_epoch(self) -> None:
-        """Every transition should appear exactly once in a single epoch."""
-        storage, obs = _make_storage_and_obs()
-        _fill_with_identifiable_data(storage, obs)
-
-        num_mini_batches = 4
-        batch_size = NUM_ENVS * NUM_STEPS
-        mini_batch_size = batch_size // num_mini_batches
-
-        all_actions = []
-        batch_count = 0
-        for batch in storage.mini_batch_generator(num_mini_batches, num_epochs=1):
-            all_actions.append(batch.actions)
-            batch_count += 1
-
-        assert batch_count == num_mini_batches
-
-        collected = torch.cat(all_actions, dim=0)
-        expected_count = num_mini_batches * mini_batch_size
-        assert collected.shape[0] == expected_count
-
-        # Check all unique action values from the stored transitions appear
-        flat_stored = storage.actions.flatten(0, 1)
-        for val in flat_stored[:expected_count]:
-            assert torch.any(torch.all(collected == val.unsqueeze(0), dim=-1))
 
     def test_epoch_count_is_respected(self) -> None:
         """The generator should yield exactly num_epochs * num_mini_batches batches."""

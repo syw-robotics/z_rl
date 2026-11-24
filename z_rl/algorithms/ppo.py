@@ -204,7 +204,7 @@ class PPO:
         # Compute the advantages
         st.advantages = st.returns - st.values
         # Normalize the advantages if per minibatch normalization is not used
-        if not self.normalize_advantage_per_mini_batch:
+        if not self.normalize_advantage_per_mini_batch and st.advantages.numel() > 1:
             st.advantages = (st.advantages - st.advantages.mean()) / (st.advantages.std() + 1e-8)
 
     def update(self) -> dict[str, float]:
@@ -278,7 +278,7 @@ class PPO:
         original_batch_size = minibatch.observations.batch_size[0]
 
         # Check if we should normalize advantages per mini batch
-        if self.normalize_advantage_per_mini_batch:
+        if self.normalize_advantage_per_mini_batch and minibatch.advantages.numel() > 1:
             with torch.no_grad():
                 minibatch.advantages = (minibatch.advantages - minibatch.advantages.mean()) / (
                     minibatch.advantages.std() + 1e-8
@@ -326,9 +326,9 @@ class PPO:
                     param_group["lr"] = self.learning_rate
 
         # Surrogate loss
-        ratio = torch.exp(actions_log_prob - torch.squeeze(minibatch.old_actions_log_prob))  # type: ignore
-        surrogate = -torch.squeeze(minibatch.advantages) * ratio  # type: ignore
-        surrogate_clipped = -torch.squeeze(minibatch.advantages) * torch.clamp(  # type: ignore
+        ratio = torch.exp(actions_log_prob - minibatch.old_actions_log_prob.squeeze(-1))  # type: ignore
+        surrogate = -minibatch.advantages.squeeze(-1) * ratio  # type: ignore
+        surrogate_clipped = -minibatch.advantages.squeeze(-1) * torch.clamp(  # type: ignore
             ratio, 1.0 - self.clip_param, 1.0 + self.clip_param
         )
         surrogate_loss = torch.max(surrogate, surrogate_clipped).mean()

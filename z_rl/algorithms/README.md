@@ -8,6 +8,7 @@ loss terms.
 The core algorithm classes are:
 
 - `PPO`: on-policy reinforcement learning with actor/critic models and rollout-based updates.
+- `SAC`: off-policy continuous control with a squashed Gaussian actor and twin action-value networks.
 - `Distillation`: behavior-cloning style training where a student model learns to match a teacher model.
 - `EncoderEstimationPPO`: `ComposablePPO` preset with encoder-latent estimation enabled.
 - `MoEPPO`: `ComposablePPO` preset with MoE gate-entropy and expert-balance regularizers.
@@ -60,6 +61,106 @@ Main responsibilities of `PPO`:
 - optionally integrates symmetry augmentation / mirror loss through `symmetry_cfg`
 - supports multi-GPU gradient averaging through `reduce_parameters()`
 - keeps `class_name` and other constructor keys in the original training config so loggers can record them
+
+## SAC
+
+Select `ZRlSacRunnerCfg` in an IsaacLab task's agent configuration. It uses the existing
+`OnPolicyRunner` collection, logging, checkpoint, and ONNX interfaces. Each SAC update samples replay.
+
+```python
+from z_rl.adaptor.isaaclab import ZRlSacRunnerCfg, ZRlVecEnvWrapper
+from z_rl.runners import OnPolicyRunner
+
+cfg = ZRlSacRunnerCfg(
+    experiment_name="sac", max_iterations=1000, save_interval=100,
+    obs_groups={"actor": ["policy"], "critic": ["policy"]},
+)
+env = ZRlVecEnvWrapper(env, clip_actions=cfg.clip_actions)
+runner = OnPolicyRunner(env, cfg.to_dict(), log_dir="logs/sac", device=env.device)
+runner.learn(cfg.max_iterations)
+```
+
+- `replay_buffer_size` and `learning_starts` count individual transitions per training process.
+  Replay holds whole vector steps and samples uniformly with replacement. Each iteration collects
+  `num_steps_per_env` vector steps, then runs `updates_per_iteration` critic updates of `batch_size` samples.
+  The actor updates every `policy_frequency` critic steps. Set `auto_alpha=False` for a fixed temperature.
+- `n_steps` sets the return horizon. Returns stop at the first episode boundary. For infinite-horizon
+  tasks on IsaacLab versions with `env_cfg.compute_final_obs`, set it to `True` before creating the
+  environment. The wrapper converts `final_obs` into `time_outs_obs`. Active Adaptation supplies this
+  observation from its pre-reset transition. A timeout without a snapshot gets a reward-only final target.
+- The actor uses finite Box bounds and wrapper clipping in environment action units. Unbounded dimensions
+  default to `[-1, 1]`. To use task-specific limits, set `cfg.actor.distribution_cfg.action_low` and
+  `action_high` to scalars or lists in action order. Inference and ONNX apply the same bounds.
+- Checkpoints contain both Q networks, their targets, actor, normalizers, optimizers, temperature, and
+  update counter. A resumed run fills a fresh replay buffer and observes the same warm-up threshold.
+
+The SAC update follows the [RSL-RL-SAC reference implementation](https://github.com/leggedrobotics/rsl_rl_sac).
+
+## FlashSAC
+
+Use `ZRlFlashSacRunnerCfg` for the single-device FlashSAC baseline. The preset collects one vector step per
+iteration and uses a one-step categorical Bellman target with a fixed learning rate. It accepts flat actor and critic
+observation groups. By default, the actor uses `policy` and the critic uses `critic` when available or `policy`
+otherwise. Set both groups explicitly in a task preset.
+
+```python
+from z_rl.adaptor.isaaclab import ZRlFlashSacRunnerCfg, ZRlVecEnvWrapper
+from z_rl.runners import OnPolicyRunner
+
+cfg = ZRlFlashSacRunnerCfg(max_iterations=10_000, obs_groups={"actor": ["policy"], "critic": ["policy"]})
+env = ZRlVecEnvWrapper(env, clip_actions=cfg.clip_actions)
+runner = OnPolicyRunner(env, cfg.to_dict(), log_dir=log_dir, device=cfg.device)
+runner.learn(cfg.max_iterations)
+```
+
+`replay_buffer_size` and `learning_starts` count individual transitions across environments. The policy uses uniform
+actions during replay warm-up. Checkpoints restore the networks, optimizers, and reward statistics. Resumed training
+rebuilds replay from the environment and repeats warm-up. Timeout bootstrapping requires a pre-reset observation in
+`extras["time_outs_obs"]`.
+
+## RLPD
+
+Both presets train the SAC actor from live environment replay and a fixed prior rollout. Use the same
+environment wrapper, observation groups, runner and export calls as in the SAC example above.
+
+| IsaacLab runner config | Minibatch when `batch_size=256` | Critic and actor updates per vector step at defaults |
+| --- | --- | --- |
+| `ZRlRlpdRunnerCfg` | 128 online + 128 prior | Train 10 LayerNorm Q heads for 20 updates. Each target uses the minimum of two randomly selected target heads. Update the actor and temperature once using the ensemble mean for the actor objective. |
+| `ZRlBtxRlpdRunnerCfg` | 256 online + 102 prior | Train twin scalar Q heads for four updates using three-step returns. Update the actor and temperature once, with return-gated behavior cloning on prior actions. |
+
+```python
+from z_rl.adaptor.isaaclab import ZRlRlpdRunnerCfg, ZRlBtxRlpdRunnerCfg
+
+cfg = ZRlRlpdRunnerCfg(  # use ZRlBtxRlpdRunnerCfg for gated BC
+    experiment_name="rlpd", max_iterations=1000, save_interval=100,
+    obs_groups={"actor": ["policy"], "critic": ["policy"]},
+)
+cfg.algorithm.prior_data = "/path/to/rollout_400_8.pt"
+```
+
+For `RLPD`, `prior_data_ratio` is the fraction of the total batch (default 0.5). For `BTXRLPD`,
+it is the number of prior samples per online sample (default 0.4). Both round the prior count down.
+`updates_per_iteration` counts critic gradient steps after collecting `num_steps_per_env` vector steps.
+`policy_frequency=None` updates the actor and temperature after the last critic step of each iteration.
+The ensemble and minibatch design follow the [original RLPD implementation](https://github.com/ikostrikov/rlpd).
+
+The BTX preset ports the prior-data and gated-BC objectives onto Z-RL's scalar SAC critic. It averages
+four sampled actions per state and excludes episode-initial rows from actor and critic losses.
+For a prior row with more than `1 / (1 - gamma)` recorded steps remaining, the BC weight is
+`clamp((1 - gamma) * (return_to_go - policy_Q), 0, 1)`. Both values use the same reward units.
+Set `bc_loss="mse"` (default coefficient 1.0) or `bc_loss="nll"` (default 0.05).
+`bc_coef=0` disables BC while keeping the mixed replay updates.
+
+**Prior archive.** Pass a trusted `.pt` file produced by Active Adaptation's `scripts/rollout.py` or
+its relabel stage. Format version 1 stores a `stacked` TensorDict with batch dimensions
+`[time, environment]`. Observation group names, feature order and action units must match the live task.
+The loader reads the action and reward keys selected by the Active Adaptation wrapper. With a generic
+VecEnv it reads `action` and sums the components of `next/reward`, including grouped rewards.
+Full archives use the recorded pre-reset `next` observations at timeouts. Compact archives use
+adjacent rows within each environment, omit the final row as a transition, and stop bootstrapping at
+resets. Both forms honor per-step discounts. Training samples the prior on CPU and transfers minibatches
+to the training device. Resuming reloads the prior from the configured path and warms up fresh online
+replay. Inference and ONNX export require only the checkpoint and model configuration.
 
 ## Distillation
 

@@ -8,9 +8,26 @@ from tensordict import TensorDict
 
 import gymnasium as gym
 from isaaclab.envs import ManagerBasedRLEnv
+from isaaclab.managers import ObservationManager, ObservationTermCfg
 
 from z_rl.env import VecEnv
 from z_rl.utils import ObsSelector
+
+
+def _history_slices(start: int, length: int, width: int, newest_first: bool) -> dict[str, slice]:
+    """Slice a contiguous block of frames, retaining their stored order."""
+    stop = start + length * width
+    without_head = slice(start + width, stop)
+    without_tail = slice(start, stop - width)
+    return {
+        "last": slice(start, start + width) if newest_first else slice(stop - width, stop),
+        "exclude_last": without_head if newest_first else without_tail,
+        "exclude_first": without_tail if newest_first else without_head,
+    }
+
+
+def _newest_first(term_cfg: ObservationTermCfg) -> bool:
+    return term_cfg.history_length > 0 and getattr(term_cfg, "history_newest_first", False)
 
 
 class ZRlVecEnvWrapper(VecEnv):
@@ -22,12 +39,7 @@ class ZRlVecEnvWrapper(VecEnv):
         wrapper.
     """
 
-    def __init__(
-        self,
-        env: ManagerBasedRLEnv,
-        clip_actions: float | None = None,
-        obs_group_concat_mode: str = "term_major",
-    ):
+    def __init__(self, env: ManagerBasedRLEnv, clip_actions: float | None = None):
         """Initializes the wrapper.
 
         Note:
@@ -36,10 +48,6 @@ class ZRlVecEnvWrapper(VecEnv):
         Args:
             env: The environment to wrap around.
             clip_actions: The clipping value for actions. If ``None``, then no clipping is done.
-            obs_group_concat_mode: Concatenation layout for observation groups that are returned as
-                term dictionaries. Supported values are ``"term_major"`` and ``"history_major"``.
-                If set to ``"history_major"``, self.concatenate_terms has to be set to False in
-                IsaacLab's ManagerBasedRLEnv ObservationCfg.
 
         Raises:
             ValueError: When the environment is not an instance of :class:`ManagerBasedRLEnv`.
@@ -52,12 +60,6 @@ class ZRlVecEnvWrapper(VecEnv):
         # initialize the wrapper
         self.env = env
         self.clip_actions = clip_actions
-        if obs_group_concat_mode not in ("term_major", "history_major"):
-            raise ValueError(
-                "obs_group_concat_mode must be either 'term_major' or 'history_major'."
-                f" Received: '{obs_group_concat_mode}'."
-            )
-        self.obs_group_concat_mode = obs_group_concat_mode
 
         # store information required by wrapper
         self.num_envs = self.unwrapped.num_envs
@@ -74,15 +76,14 @@ class ZRlVecEnvWrapper(VecEnv):
         self._modify_action_space()
 
         # cache static observation metadata used by downstream RL code
-        self._obs_format = self._create_obs_format()
-        self._obs_group_layout_mode_map = self._create_obs_group_layout_mode_map()
-        self._obs_group_term_order_map = self._create_obs_group_term_order_map()
-        self._obs_group_concatenate_dim_map = self._create_obs_group_concatenate_dim_map()
-        self._dict_obs_group_names = (
-            self._create_dict_obs_group_names()
-        )  # check for dict obs (when concatenate_terms is False)
-        self._history_major_group_history_length_map = self._create_history_major_group_history_length_map()
-        self._obs_group_time_slice_map = self._create_obs_group_time_slice_map()
+        obs_manager = self.unwrapped.observation_manager
+        self._obs_format = self._create_obs_format(obs_manager)
+        self._dict_obs_groups = {
+            group_name: (tuple(term_names), obs_manager._group_obs_concatenate_dim[group_name])
+            for group_name, term_names in obs_manager.active_terms.items()
+            if not obs_manager.group_obs_concatenate[group_name]
+        }
+        self._obs_group_time_slice_map = self._create_obs_group_time_slice_map(obs_manager)
         self._symmetry_compiler = None
 
         # reset at the start since the Z-RL runner does not call reset
@@ -162,11 +163,6 @@ class ZRlVecEnvWrapper(VecEnv):
         return self._obs_format
 
     @property
-    def obs_group_layout_mode_map(self) -> dict[str, str]:
-        """The configured layout mode for each observation group."""
-        return self._obs_group_layout_mode_map
-
-    @property
     def obs_group_time_slice_map(self) -> dict[str, dict[str, ObsSelector]]:
         """The cached time-slice selectors for compatible observation groups."""
         return self._obs_group_time_slice_map
@@ -190,12 +186,12 @@ class ZRlVecEnvWrapper(VecEnv):
     def reset(self) -> tuple[TensorDict, dict]:  # noqa: D102
         # reset the environment
         obs_dict, extras = self.env.reset()
-        return TensorDict(self._process_obs_groups(obs_dict), batch_size=[self.num_envs]), extras
+        return self._pack_observations(obs_dict), extras
 
     def get_observations(self) -> TensorDict:
         """Returns the current observations of the environment."""
         obs_dict = self.unwrapped.observation_manager.compute()
-        return TensorDict(self._process_obs_groups(obs_dict), batch_size=[self.num_envs])
+        return self._pack_observations(obs_dict)
 
     def step(self, actions: torch.Tensor) -> tuple[TensorDict, torch.Tensor, torch.Tensor, dict]:
         # clip actions
@@ -209,8 +205,38 @@ class ZRlVecEnvWrapper(VecEnv):
         # this is only needed for infinite horizon tasks
         if not self.unwrapped.cfg.is_finite_horizon:
             extras["time_outs"] = truncated
+            terminal_obs = extras.get("time_outs_obs", extras.get("final_obs"))
+            if terminal_obs is not None:
+                # IsaacLab reuses extras across steps. Keep this translated snapshot local to this step.
+                extras = {
+                    **extras,
+                    "terminated": terminated,
+                    "time_outs_obs": self._pack_observations(terminal_obs),
+                }
         # return the step information
-        return TensorDict(self._process_obs_groups(obs_dict), batch_size=[self.num_envs]), rew, dones, extras
+        return self._pack_observations(obs_dict), rew, dones, extras
+
+    def make_command_metric_compute_function(self):
+        """Return a function that collects metrics from the active command terms."""
+        command_manager = self.unwrapped.command_manager
+        term_functions = {}
+        for name in command_manager.active_terms:
+            make_compute = getattr(command_manager.get_term(name), "compute_command_metrics", None)
+            if make_compute is not None:
+                compute = make_compute()
+                if compute is not None:
+                    term_functions[name] = compute
+        if not term_functions:
+            return None
+
+        def compute_metrics():
+            return {
+                f"Metrics/{name}/{key}": value
+                for name, compute in term_functions.items()
+                for key, value in compute().items()
+            }
+
+        return compute_metrics
 
     def compile_symmetry(self) -> None:
         """Compile declared observation/action symmetry once for training."""
@@ -235,179 +261,75 @@ class ZRlVecEnvWrapper(VecEnv):
     Helper functions
     """
 
-    def _create_obs_format(self) -> dict[str, dict[str, tuple[int, ...]]]:
-        """Creates the cached observation format metadata."""
-        obs_manager = self.unwrapped.observation_manager
-        return {
-            group_name: {
-                term_name: ((term_cfg.history_length,) + self._get_single_frame_obs_term_dim(term_dim, term_cfg))
-                for term_name, term_dim, term_cfg in zip(
-                    obs_manager.active_terms[group_name],
-                    obs_manager.group_obs_term_dim[group_name],
-                    obs_manager._group_obs_term_cfgs[group_name],
-                )
-            }
-            for group_name in obs_manager.active_terms
-        }
+    def _create_obs_format(self, obs_manager: ObservationManager) -> dict[str, dict[str, tuple[int, ...]]]:
+        """Record each term's history length and single-frame shape."""
+        obs_format = {}
+        for group, term_names in obs_manager.active_terms.items():
+            term_formats = {}
+            term_dims = obs_manager.group_obs_term_dim[group]
+            term_cfgs = obs_manager._group_obs_term_cfgs[group]
+            for name, shape, cfg in zip(term_names, term_dims, term_cfgs):
+                history = cfg.history_length
+                if history and cfg.flatten_history_dim:
+                    if len(shape) != 1:
+                        raise ValueError(
+                            f"Flattened observation term '{group}/{name}' must have one non-batch dimension, "
+                            f"got {shape}."
+                        )
+                    shape = (shape[0] // history,)
+                elif history:
+                    shape = shape[1:]
+                term_formats[name] = (history, *shape)
+            obs_format[group] = term_formats
+        return obs_format
 
-    def _create_obs_group_time_slice_map(self) -> dict[str, dict[str, ObsSelector]]:
-        """Creates cached group-level time slices for concatenated vector observation groups."""
-        obs_manager = self.unwrapped.observation_manager
-        obs_group_time_slice_map = {}
-        for group_name in obs_manager.active_terms:
-            if not self._is_obs_group_time_slice_compatible(group_name, obs_manager):
+    def _create_obs_group_time_slice_map(self, obs_manager: ObservationManager) -> dict[str, dict[str, ObsSelector]]:
+        """Precompute temporal selectors for groups of flat vector terms."""
+        group_time_major = getattr(obs_manager, "_group_obs_time_major", {})
+        time_slices = {}
+        for group, term_formats in self._obs_format.items():
+            if any(len(shape) != 1 for shape in obs_manager.group_obs_term_dim[group]):
                 continue
-            layout_mode = self._obs_group_layout_mode_map[group_name]
-            obs_group_time_slice_map[group_name] = self._build_obs_group_time_slices(group_name, layout_mode)
-        if obs_group_time_slice_map:
-            print(
-                "[ZRlVecEnvWrapper]: enabled obs time slicing for groups: "
-                f"{[(group_name, self._obs_group_layout_mode_map[group_name]) for group_name in obs_group_time_slice_map]}"
+            formats = tuple(term_formats.values())
+            if any(len(fmt) != 2 for fmt in formats):
+                continue
+            time_slices[group] = self._build_obs_group_time_slices(
+                formats, obs_manager._group_obs_term_cfgs[group], time_major=group_time_major.get(group, False)
             )
-        return obs_group_time_slice_map
+        if time_slices:
+            print(f"[ZRlVecEnvWrapper]: enabled obs time slicing for groups: {list(time_slices)}")
+        return time_slices
 
-    def _create_obs_group_layout_mode_map(self) -> dict[str, str]:
-        """Creates the wrapper output layout for each observation group."""
-        obs_manager = self.unwrapped.observation_manager
+    def _build_obs_group_time_slices(
+        self, formats: tuple[tuple[int, ...], ...], term_cfgs: list[ObservationTermCfg], *, time_major: bool
+    ) -> dict[str, ObsSelector]:
+        """Build selectors from the group's resolved term formats and history order."""
+        if time_major:
+            length, _ = formats[0]
+            width = sum(width for _, width in formats)
+            slices = _history_slices(0, length, width, _newest_first(term_cfgs[0]))
+            return {name: ObsSelector(window) for name, window in slices.items()}
+
+        indices = {"last": [], "exclude_last": [], "exclude_first": []}
+        offset = 0
+        for (history, width), cfg in zip(formats, term_cfgs):
+            length = max(history, 1)
+            for name, window in _history_slices(offset, length, width, _newest_first(cfg)).items():
+                indices[name].extend(range(window.start, window.stop))
+            offset += length * width
         return {
-            group_name: self._get_obs_group_layout_mode(group_name, obs_manager)
-            for group_name in obs_manager.active_terms
+            name: ObsSelector(torch.tensor(values, device=self.device, dtype=torch.long))
+            for name, values in indices.items()
         }
 
-    def _create_obs_group_term_order_map(self) -> dict[str, tuple[str, ...]]:
-        """Creates cached term order metadata for each observation group."""
-        obs_manager = self.unwrapped.observation_manager
-        return {group_name: tuple(obs_manager.active_terms[group_name]) for group_name in obs_manager.active_terms}
-
-    def _create_obs_group_concatenate_dim_map(self) -> dict[str, int]:
-        """Creates cached concatenation dimensions for observation groups."""
-        obs_manager = self.unwrapped.observation_manager
-        return {
-            group_name: obs_manager._group_obs_concatenate_dim[group_name]
-            for group_name in obs_manager._group_obs_concatenate_dim
-        }
-
-    def _create_dict_obs_group_names(self) -> tuple[str, ...]:
-        """Creates the cached list of observation groups that require dict-to-tensor conversion."""
-        obs_manager = self.unwrapped.observation_manager
-        return tuple(
-            group_name for group_name in obs_manager.active_terms if not obs_manager.group_obs_concatenate[group_name]
-        )
-
-    def _create_history_major_group_history_length_map(self) -> dict[str, int]:
-        """Creates cached history lengths for history-major observation groups."""
-        return {
-            group_name: next(iter({term_format[0] for term_format in term_formats.values()}))
-            for group_name, term_formats in self._obs_format.items()
-            if self._obs_group_layout_mode_map[group_name] == "history_major"
-        }
-
-    def _is_obs_group_time_slice_compatible(self, group_name: str, obs_manager) -> bool:
-        """Checks whether an observation group supports cached time slicing."""
-        group_dim = obs_manager.group_obs_dim[group_name]
-        term_formats = self._obs_format[group_name]
-
-        if obs_manager.group_obs_concatenate[group_name]:
-            # Concatenated groups must already be flat vectors.
-            if not isinstance(group_dim, tuple) or len(group_dim) != 1:
-                return False
-        else:
-            # Dict groups must be vector terms so the wrapper can concatenate them.
-            if any(len(term_format[1:]) != 1 for term_format in term_formats.values()):
-                return False
-
-        for term_format in term_formats.values():
-            frame_shape = term_format[1:]
-            # Only support vector terms per frame.
-            if len(frame_shape) != 1:
-                return False
-        return True
-
-    def _get_obs_group_layout_mode(self, group_name: str, obs_manager) -> str:
-        """Returns the wrapper output layout for an observation group."""
-        if (
-            not obs_manager.group_obs_concatenate[group_name]
-            and self.obs_group_concat_mode == "history_major"
-            and self._is_obs_group_time_slice_compatible(group_name, obs_manager)
-        ):
-            return "history_major"
-        return "term_major"
-
-    def _build_obs_group_time_slices(self, group_name: str, layout_mode: str) -> dict[str, ObsSelector]:
-        """Builds cached time-slice selectors for a validated observation group."""
-        term_formats = self._obs_format[group_name]
-        common_history_length = next(iter({term_format[0] for term_format in term_formats.values()}))
-        common_history_length = max(common_history_length, 1)
-
-        # For history_major, use contiguous slices
-        if layout_mode == "history_major":
-            frame_dim = sum(term_format[1] for term_format in term_formats.values())
-            group_dim = common_history_length * frame_dim
-            return {
-                "last": ObsSelector(slice(group_dim - frame_dim, group_dim)),
-                "exclude_last": ObsSelector(slice(0, group_dim - frame_dim)),
-                "exclude_first": ObsSelector(slice(frame_dim, group_dim)),
-            }
-
-        # For term_major, use descrete index tensor
-        flat_offset = 0
-        last_indices = []
-        exclude_last_indices = []
-        exclude_first_indices = []
-        for term_format in term_formats.values():
-            frame_dim = term_format[1]
-            frame_slices = [
-                slice(flat_offset + frame_idx * frame_dim, flat_offset + (frame_idx + 1) * frame_dim)
-                for frame_idx in range(common_history_length)
-            ]
-            last_indices.extend(range(frame_slices[-1].start, frame_slices[-1].stop))
-            for frame_slice in frame_slices[:-1]:
-                exclude_last_indices.extend(range(frame_slice.start, frame_slice.stop))
-            for frame_slice in frame_slices[1:]:
-                exclude_first_indices.extend(range(frame_slice.start, frame_slice.stop))
-            flat_offset += common_history_length * frame_dim
-
-        return {
-            "last": ObsSelector(torch.tensor(last_indices, device=self.device, dtype=torch.long)),
-            "exclude_last": ObsSelector(torch.tensor(exclude_last_indices, device=self.device, dtype=torch.long)),
-            "exclude_first": ObsSelector(torch.tensor(exclude_first_indices, device=self.device, dtype=torch.long)),
-        }
-
-    def _process_obs_groups(self, obs_dict: dict) -> dict:
-        """Converts dict-based observation groups into tensors using the configured layout."""
-        # if no dict obs groups, return the original obs dict
-        if not self._dict_obs_group_names:
-            return obs_dict
-        # otherwise, concatenate them into tensors according to a configured layout (term-major or history-major)
-        processed_obs_dict = obs_dict.copy()
-        for group_name in self._dict_obs_group_names:
-            processed_obs_dict[group_name] = self._concatenate_obs_group(group_name, processed_obs_dict[group_name])
-        return processed_obs_dict
-
-    def _concatenate_obs_group(self, group_name: str, group_obs: dict[str, torch.Tensor]) -> torch.Tensor:
-        """Concatenates a dict-based observation group into a tensor."""
-        if self._obs_group_layout_mode_map[group_name] == "history_major":
-            return self._concatenate_obs_group_history_major(group_name, group_obs)
-        return self._concatenate_obs_group_term_major(group_name, group_obs)
-
-    def _concatenate_obs_group_term_major(self, group_name: str, group_obs: dict[str, torch.Tensor]) -> torch.Tensor:
-        """Concatenates group terms in Isaac Lab's default term-major layout."""
-        return torch.cat(
-            [group_obs[term_name] for term_name in self._obs_group_term_order_map[group_name]],
-            dim=self._obs_group_concatenate_dim_map[group_name],
-        )
-
-    def _concatenate_obs_group_history_major(self, group_name: str, group_obs: dict[str, torch.Tensor]) -> torch.Tensor:
-        """Concatenates vector history terms into a history-major flat layout."""
-        term_order = self._obs_group_term_order_map[group_name]
-        common_history_length = self._history_major_group_history_length_map[group_name]
-        reshaped_terms = [
-            group_obs[term_name].reshape(
-                self.num_envs, common_history_length, self._obs_format[group_name][term_name][1]
-            )
-            for term_name in term_order
-        ]
-        return torch.cat(reshaped_terms, dim=-1).reshape(self.num_envs, -1)
+    def _pack_observations(self, obs_dict: dict) -> TensorDict:
+        """Concatenate dictionary groups and wrap observations on the environment device."""
+        if self._dict_obs_groups:
+            obs_dict = obs_dict.copy()
+            for group_name, (term_names, dim) in self._dict_obs_groups.items():
+                group_obs = obs_dict[group_name]
+                obs_dict[group_name] = torch.cat([group_obs[name] for name in term_names], dim=dim)
+        return TensorDict(obs_dict, batch_size=[self.num_envs], device=self.device)
 
     def _modify_action_space(self):
         """Modifies the action space to the clip range."""
@@ -423,17 +345,3 @@ class ZRlVecEnvWrapper(VecEnv):
         self.env.unwrapped.action_space = gym.vector.utils.batch_space(
             self.env.unwrapped.single_action_space, self.num_envs
         )
-
-    @staticmethod
-    def _get_single_frame_obs_term_dim(term_dim: tuple[int, ...], term_cfg) -> tuple[int, ...]:
-        """Returns the single-frame observation shape for a term."""
-        if term_cfg.history_length == 0:
-            return term_dim
-        if term_cfg.flatten_history_dim:
-            if len(term_dim) != 1:
-                raise ValueError(
-                    "Flattened history observation terms are expected to have a single non-batch dimension."
-                    f" Received term_dim={term_dim}."
-                )
-            return (term_dim[0] // term_cfg.history_length,)
-        return term_dim[1:]

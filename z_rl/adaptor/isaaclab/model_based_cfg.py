@@ -21,6 +21,7 @@ class ZRlModelBasedRunnerCfg(ZRlBaseRunnerCfg):
         "gamma": 0.99,
         "lam": 0.95,
         "actor_learning_rate": 2e-4,
+        "actor_weight_decay": 0.0,
         "critic_learning_rate": 2e-4,
         "critic_epochs": 5,
         "critic_minibatches": 4,
@@ -38,6 +39,7 @@ class ZRlModelBasedRunnerCfg(ZRlBaseRunnerCfg):
     world_model_training: dict = {
         "optimizer": "adam",
         "learning_rate": 2e-4,
+        "weight_decay": 0.0,
         "unroll_length": 8,
         "batch_size": 2048,
         "updates_per_iteration": 10,

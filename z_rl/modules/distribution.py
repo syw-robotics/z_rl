@@ -6,6 +6,7 @@
 
 from __future__ import annotations
 
+import copy
 import math
 import torch
 import torch.nn as nn
@@ -315,6 +316,62 @@ class HeteroscedasticGaussianDistribution(GaussianDistribution):
         elif self.std_type == "log":
             init_std_log = torch.log(torch.tensor(self.init_std + 1e-7))
             torch.nn.init.constant_(head[-2].bias[self.output_dim :], init_std_log)  # type: ignore
+
+
+class SquashedGaussianDistribution(HeteroscedasticGaussianDistribution):
+    """State-dependent Gaussian followed by tanh and a per-action affine transform.
+
+    The logged std and the Gaussian parameters describe the distribution before squashing.
+    """
+
+    def __init__(self, output_dim: int, init_std: float = 1.0, action_low=-1.0, action_high=1.0) -> None:
+        super().__init__(output_dim, init_std=init_std, std_type="log", std_range=(1e-6, math.exp(2)))
+        low = torch.as_tensor(action_low, dtype=torch.float32).expand(output_dim)
+        high = torch.as_tensor(action_high, dtype=torch.float32).expand(output_dim)
+        if not (low.isfinite() & high.isfinite() & (high > low)).all() or init_std <= 0:
+            raise ValueError("Squashed Gaussian requires finite increasing action bounds and positive init_std.")
+        self.transform = self._ScaledTanh(low, high)
+
+    def init_head_weights(self, head: nn.Module) -> None:
+        super().init_head_weights(head)
+        nn.init.normal_(head[-2].weight[: self.output_dim], std=1e-3)
+        nn.init.zeros_(head[-2].bias[: self.output_dim])
+
+    def sample(self) -> torch.Tensor:
+        return self.transform(self._distribution.sample())
+
+    def _log_prob(self, raw: torch.Tensor) -> torch.Tensor:
+        # log(1 - tanh(x)^2) evaluated before squashing, including at saturation.
+        log_jacobian = 2 * (math.log(2) - raw - nn.functional.softplus(-2 * raw))
+        return (self._distribution.log_prob(raw) - log_jacobian - self.transform.scale.log()).sum(dim=-1)
+
+    def rsample_with_log_prob(self) -> tuple[torch.Tensor, torch.Tensor]:
+        raw = self._distribution.rsample()
+        return self.transform(raw), self._log_prob(raw)
+
+    def log_prob(self, outputs: torch.Tensor) -> torch.Tensor:
+        unit = (outputs - self.transform.bias) / self.transform.scale
+        eps = torch.finfo(unit.dtype).eps
+        return self._log_prob(unit.clamp(-1 + eps, 1 - eps).atanh())
+
+    @property
+    def entropy(self) -> torch.Tensor:
+        return -self._log_prob(self._distribution.rsample())
+
+    def deterministic_output(self, head_output: torch.Tensor) -> torch.Tensor:
+        return self.transform(super().deterministic_output(head_output))
+
+    def as_deterministic_output_module(self) -> nn.Module:
+        return nn.Sequential(super().as_deterministic_output_module(), copy.deepcopy(self.transform))
+
+    class _ScaledTanh(nn.Module):
+        def __init__(self, low: torch.Tensor, high: torch.Tensor) -> None:
+            super().__init__()
+            self.register_buffer("scale", (high - low) / 2)
+            self.register_buffer("bias", (high + low) / 2)
+
+        def forward(self, raw: torch.Tensor) -> torch.Tensor:
+            return self.bias + self.scale * raw.tanh()
 
 
 class BetaDistribution(Distribution):

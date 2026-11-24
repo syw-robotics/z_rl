@@ -135,6 +135,10 @@ class ActiveAdaptationVecEnvWrapper(VecEnv):
             "time_outs": truncated,
             "discount": discount.squeeze(-1) if discount.shape[-1] == 1 else discount,
         }
+        if all(key in next_td for key in self.observation_keys):
+            extras["time_outs_obs"] = next_td.select(*self.observation_keys)
+        if "terminated" in next_td:
+            extras["terminated"] = next_td["terminated"]
         if self.include_episode_stats and "stats" in next_td:
             logs, scales = self._prepare_episode_stats(next_td.get("stats"))
             extras["log"] = logs

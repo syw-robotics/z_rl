@@ -16,7 +16,7 @@ class SequenceReplayBuffer:
     def add(self, transition):
         if not self.data:
             self.data = {
-                k: torch.empty((self.capacity, *v.shape), dtype=v.dtype, device=self.device)
+                k: torch.empty_like(v.expand(self.capacity, *v.shape), device=self.device)
                 for k, v in transition.items()
             }
         for key, destination in self.data.items():

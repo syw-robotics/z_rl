@@ -13,44 +13,16 @@ from tensordict import TensorDict
 
 from z_rl.env import VecEnv
 from z_rl.models import MLPModel
+from z_rl.models.construction import build_model, init_cnn_weights, init_head_weights
 from z_rl.storage import RolloutStorage
 from z_rl.utils import (
     compile_model,
-    inject_obs_time_slice_map,
     reduce_gradients_in_buckets,
     resolve_class,
     resolve_obs_groups,
 )
 from z_rl.utils.checkpoint import model_checkpoint_entries, module_state_dict_from_checkpoint
 from z_rl.utils.opt import build_optimizer
-
-
-def _pop_model_init_config(model_cfg: dict) -> tuple[float | tuple[float, ...] | None, bool | None]:
-    """Remove post-construction initialization settings from a model config."""
-    init_weights = model_cfg.pop("init_weights", None)
-    cnn_init_weights = model_cfg.pop("cnn_init_weights", None)
-    return init_weights, cnn_init_weights
-
-
-def _apply_model_init_config(
-    model: MLPModel,
-    model_name: str,
-    init_weights: float | tuple[float, ...] | None,
-    cnn_init_weights: bool | None,
-) -> None:
-    """Apply optional post-construction initialization hooks to a model."""
-    if init_weights is not None:
-        model.head.init_weights(init_weights)
-        print(f"{model_name} Head uses orthogonal init: {init_weights}")
-
-    if cnn_init_weights:
-        cnn = getattr(getattr(model, "latent_adapter", None), "cnn", None)
-        if cnn is None or not hasattr(cnn, "init_cnn_weights"):
-            raise ValueError(
-                f"{model_name} received cnn_init_weights=True but the model does not define a CNN encoder."
-            )
-        cnn.init_cnn_weights()
-        print(f"{model_name} CNNs use kaiming init")
 
 
 class Distillation:
@@ -76,7 +48,7 @@ class Distillation:
         max_grad_norm: float | None = None,
         loss_type: str = "mse",
         optimizer: str = "adam",
-        use_muon: bool = False,  # Muon for hidden 2-D weights; AdamW for biases/heads (see utils.opt)
+        use_muon: bool = False,  # Legacy override for optimizer="muon_adamw".
         muon_adamw_weight_decay: float = 0.01,
         use_mixed_precision: bool = False,
         student_stochastic_output: bool = False,
@@ -308,9 +280,6 @@ class Distillation:
         """Construct the distillation algorithm."""
         # Resolve class callables without mutating the original config (keeps class names for logging).
         alg_class, alg_cfg = resolve_class(cfg["algorithm"])
-        student_class, student_cfg = resolve_class(cfg["student"])
-        teacher_class, teacher_cfg = resolve_class(cfg["teacher"])
-
         # Resolve observation groups
         default_sets = ["student", "teacher"]
         cfg["obs_groups"] = resolve_obs_groups(obs, cfg["obs_groups"], default_sets)
@@ -320,25 +289,14 @@ class Distillation:
             raise ValueError("The symmetry extension is not compatible with Distillation.")
         alg_cfg["symmetry_cfg"] = None
 
-        # Inject wrapper-provided time-slice metadata for models that can consume it.
-        inject_obs_time_slice_map(student_cfg, student_class, env)
-        inject_obs_time_slice_map(teacher_cfg, teacher_class, env)
-
-        # Pop init-only configs before creating models (they are not model __init__ args)
-        student_init_weights, student_cnn_init_weights = _pop_model_init_config(student_cfg)
-        teacher_init_weights, teacher_cnn_init_weights = _pop_model_init_config(teacher_cfg)
-
-        # Initialize the policy
-        student: MLPModel = student_class(obs, cfg["obs_groups"], "student", env.num_actions, **student_cfg).to(
-            device
-        )
+        groups = cfg["obs_groups"]
+        student = build_model(cfg["student"], obs, groups, "student", env.num_actions, env, device)
         print(f"Student Model: {student}")
-        teacher: MLPModel = teacher_class(obs, cfg["obs_groups"], "teacher", env.num_actions, **teacher_cfg).to(
-            device
-        )
+        teacher = build_model(cfg["teacher"], obs, groups, "teacher", env.num_actions, env, device)
         print(f"Teacher Model: {teacher}")
-        _apply_model_init_config(student, "Student", student_init_weights, student_cnn_init_weights)
-        _apply_model_init_config(teacher, "Teacher", teacher_init_weights, teacher_cnn_init_weights)
+        for role, model in (("student", student), ("teacher", teacher)):
+            init_head_weights(model, cfg[role], role.title())
+            init_cnn_weights(model, cfg[role], role.title())
         print("-" * 80)
 
         # Initialize the storage

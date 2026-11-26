@@ -1,5 +1,7 @@
+from copy import deepcopy
 from types import SimpleNamespace
 
+import pytest
 import torch
 from tensordict import TensorDict
 from z_rl.runners.model_based_runner import ModelBasedRunner
@@ -233,27 +235,68 @@ def test_first_ema_update_copies_normalization_after_warmup(tmp_path):
         torch.testing.assert_close(avg, live)
 
 
-def test_muon_training_and_optimizer_resume(tmp_path):
-    from z_rl.utils.opt import MuonAdamWWrapper
+@pytest.mark.skipif(not hasattr(torch.optim, "Muon"), reason="PyTorch Muon required")
+def test_resume_legacy_muon_checkpoint_with_named_optimizer(tmp_path):
+    from z_rl.utils.opt import OptimizerGroup
 
     cfg = training_cfg()
     cfg["algorithm"]["use_muon"] = True
     cfg["world_model_training"]["use_muon"] = True
     runner = ModelBasedRunner(TrainingEnv(), cfg, str(tmp_path / "train"))
     for optimizer in (runner.alg.actor_optimizer, runner.alg.critic_optimizer, runner.wm_optimizer):
-        assert isinstance(optimizer, MuonAdamWWrapper)
+        assert isinstance(optimizer, OptimizerGroup)
         assert all(group["weight_decay"] == 0.0 for group in optimizer.param_groups)
     runner.learn(2)
+
+    for section in ("algorithm", "world_model_training"):
+        del cfg[section]["use_muon"]
+        cfg[section]["optimizer"] = "muon_adamw"
     resumed = ModelBasedRunner(TrainingEnv(), cfg, str(tmp_path / "resume"))
+    for optimizer in (resumed.alg.actor_optimizer, resumed.alg.critic_optimizer, resumed.wm_optimizer):
+        assert all(group["weight_decay"] == 0.0 for group in optimizer.param_groups)
+    assert any(group.get("betas") == (0.9, 0.95) for group in resumed.alg.actor_optimizer.param_groups)
     resumed.load(tmp_path / "train/model_2.pt")
     resumed.learn(1)
     assert resumed.current_learning_iteration == 3
 
+    cfg["world_model_training"]["trainable"] = False
+    cfg["resume"] = True
+    frozen = ModelBasedRunner(TrainingEnv(), cfg, str(tmp_path / "frozen"))
+    frozen.load(tmp_path / "train/model_2.pt")
+    assert all(not param.requires_grad for param in frozen.world_model.parameters())
+
 
 def test_capture_updates_requires_cuda_training_device(tmp_path):
-    import pytest
-
     cfg = training_cfg()
     cfg['capture_updates'] = True
     with pytest.raises(ValueError, match='requires a CUDA training device'):
         ModelBasedRunner(TrainingEnv(), cfg, str(tmp_path))
+
+
+@pytest.mark.skipif(not torch.cuda.is_available(), reason="CUDA required")
+@pytest.mark.parametrize(
+    ("batch_updates", "capture_cfg"),
+    [
+        (False, {"capture_world_model_updates": True}),
+        (True, {"capture_updates": True, "capture_policy_updates": False}),
+    ],
+)
+def test_shac_captures_only_world_model_after_loading_eager_checkpoint(tmp_path, batch_updates, capture_cfg):
+    from z_rl.utils.cuda_graph import GraphedUpdate
+
+    cfg = training_cfg()
+    eager = ModelBasedRunner(TrainingEnv(), deepcopy(cfg), str(tmp_path / "eager"), device="cuda")
+    eager.learn(1)
+    path = tmp_path / "eager/model_1.pt"
+
+    cfg.update(capture_cfg)
+    cfg["world_model_training"]["batch_updates"] = batch_updates
+    runner = ModelBasedRunner(TrainingEnv(), cfg, str(tmp_path / "captured"), device="cuda")
+    runner.load(path)
+    update = runner._update_world_models if batch_updates else runner._update_world_model
+    assert isinstance(update, GraphedUpdate)
+    assert not isinstance(runner._update_policy, GraphedUpdate)
+    runner.learn(4)
+    assert update.graph is not None
+    runner.load(path)
+    assert update.graph is None

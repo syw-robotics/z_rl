@@ -7,6 +7,7 @@
 
 from .composition import ComposableModel, GroupObsLatentAdapter, ObsLatentAdapter, HeadSpec, LatentSpec
 from .mlp_model import MLPModel
+from .sac_critic import SACCriticModel
 from .variants import (
     CNNModel,
     GroupMLPEncoderModel,
@@ -24,6 +25,7 @@ from .variants.simba_model import SimBaHeadSpec
 
 __all__ = [
     "MLPModel",
+    "SACCriticModel",
     "ComposableModel",
     "ObsLatentAdapter",
     "GroupObsLatentAdapter",

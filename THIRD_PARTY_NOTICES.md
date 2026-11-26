@@ -12,10 +12,18 @@ Its ETH Zurich and NVIDIA copyright notices and BSD-3-Clause license are retaine
 in [LICENSE](LICENSE) and the relevant source files. The Preferred Networks
 copyright notice in `z_rl/modules/normalization.py` is also retained.
 
+The SAC algorithm follows the BSD-3-Clause [RSL-RL-SAC implementation](https://github.com/leggedrobotics/rsl_rl_sac/tree/e0d243a).
+
 ## Isaac Lab
 
 The Isaac Lab adaptor contains code derived from
 [Isaac Lab](https://github.com/isaac-sim/IsaacLab), under BSD-3-Clause.
 File-level copyright notices are retained. The full upstream license is included
 in [isaaclab-license.txt](licenses/dependencies/isaaclab-license.txt).
+
+## FlashSAC
+
+The FlashSAC variant adapts the PyTorch implementation from [FlashSAC](https://github.com/Holiday-Robot/FlashSAC/tree/87edc90).
+The upstream MIT license and Holiday Robotics copyright notice are included in
+[flashsac-license.txt](licenses/dependencies/flashsac-license.txt).
 

@@ -2,15 +2,24 @@ from copy import deepcopy
 
 import pytest
 import torch
-from z_rl.utils.cuda_graph import GraphedUpdate, graph_state, make_capturable
+from z_rl.utils.cuda_graph import GraphedUpdate, graph_config, graph_state, make_capturable
 from z_rl.utils.opt import build_optimizer
 from z_rl.runners.model_based_runner import ModelBasedRunner
 from z_rl.storage.sequence_replay import SequenceReplayBuffer
 
 
-pytestmark = pytest.mark.skipif(not torch.cuda.is_available(), reason='CUDA required')
+requires_cuda = pytest.mark.skipif(not torch.cuda.is_available(), reason="CUDA required")
 
 
+def test_graph_config_detects_child_mode_change():
+    model = torch.nn.Sequential(torch.nn.Dropout())
+    training_config = graph_config([model], [])
+    model[0].eval()
+    assert graph_config([model], []) != training_config
+
+
+@requires_cuda
+@pytest.mark.skipif(not hasattr(torch.optim, "Muon"), reason="PyTorch Muon required")
 def test_recapture_after_optimizer_load_and_buffer_replacement():
     torch.manual_seed(31)
     eager = torch.nn.Sequential(torch.nn.Linear(4, 8), torch.nn.Tanh(), torch.nn.Linear(8, 8),
@@ -18,7 +27,7 @@ def test_recapture_after_optimizer_load_and_buffer_replacement():
     eager.register_buffer('offset', torch.zeros(2, device='cuda'))
     captured = deepcopy(eager)
     models = [eager, captured]
-    opts = [make_capturable(build_optimizer([m], learning_rate=.001, use_muon=True,
+    opts = [make_capturable(build_optimizer([m], learning_rate=.001, optimizer="muon_adamw",
                                             muon_adamw_weight_decay=0.)) for m in models]
 
     def update(model, opt, data):
@@ -46,6 +55,7 @@ def test_recapture_after_optimizer_load_and_buffer_replacement():
     assert graph.graph is not None
 
 
+@requires_cuda
 def test_grouped_updates_match_sequential_optimizer_steps():
     from types import SimpleNamespace
     torch.manual_seed(42)
@@ -74,6 +84,7 @@ def test_grouped_updates_match_sequential_optimizer_steps():
         torch.testing.assert_close(opts[0].state[a], opts[1].state[b])
 
 
+@requires_cuda
 def test_selective_replay_matches_full_sampling_and_boundary_mask():
     replay = SequenceReplayBuffer(6, 2, 'cuda')
     for i in range(9):

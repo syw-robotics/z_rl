@@ -30,11 +30,13 @@ def _config_snapshot(value):
 
 
 def graph_config(objects, optimizers):
-    """Collect explicit capture_config hooks and optimizer Python hyperparameters."""
+    """Collect module modes, explicit capture config, and optimizer Python hyperparameters."""
     config = []
     for obj in objects:
         modules = obj.modules() if isinstance(obj, nn.Module) else (obj,)
         for module in modules:
+            if isinstance(module, nn.Module):
+                config.append(module.training)
             hook = getattr(module, "capture_config", None)
             if hook is not None:
                 config.append(hook())

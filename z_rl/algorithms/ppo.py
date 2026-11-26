@@ -17,13 +17,12 @@ from collections import defaultdict
 from z_rl.env import VecEnv
 from z_rl.extensions import Symmetry, resolve_symmetry_config
 from z_rl.models import MLPModel
+from z_rl.models.construction import build_model, init_cnn_weights, init_head_weights
 from z_rl.storage import RolloutStorage
 from z_rl.utils import (
     compile_model,
-    inject_obs_time_slice_map,
     reduce_gradients_in_buckets,
     resolve_callable,
-    resolve_class,
     resolve_obs_groups,
 )
 from z_rl.utils.checkpoint import model_checkpoint_entries
@@ -58,7 +57,7 @@ class PPO:
         learning_rate: float = 0.001,
         max_grad_norm: float = 1.0,
         optimizer: str = "adam",
-        use_muon: bool = False,  # Muon for hidden 2-D weights; AdamW for biases/heads/std (see utils.opt)
+        use_muon: bool = False,  # Legacy override for optimizer="muon_adamw".
         muon_adamw_weight_decay: float = 0.01,
         use_clipped_value_loss: bool = True,
         schedule: str = "adaptive",
@@ -74,6 +73,14 @@ class PPO:
         grad_reduce_bucket_mb: float = 25,
     ) -> None:
         """Initialize the algorithm with models, storage, and optimization settings."""
+        recurrent = actor.is_recurrent or critic.is_recurrent
+        partition_size = storage.num_envs if recurrent else storage.num_envs * storage.num_transitions_per_env
+        if num_mini_batches <= 0 or partition_size % num_mini_batches:
+            dimension = "num_envs" if recurrent else "num_envs * num_transitions_per_env"
+            raise ValueError(
+                f"num_mini_batches ({num_mini_batches}) must be positive and divide {dimension} ({partition_size})."
+            )
+
         # Device-related parameters
         self.device = device
         self.is_multi_gpu = multi_gpu_cfg is not None
@@ -90,7 +97,7 @@ class PPO:
         # Symmetry extension
         if symmetry_augmentation and symmetry_cfg is None:
             raise ValueError("symmetry_augmentation requires an environment-backed symmetry config.")
-        if symmetry_cfg is not None and (actor.is_recurrent or critic.is_recurrent):
+        if symmetry_cfg is not None and recurrent:
             raise ValueError(
                 "Symmetry augmentation is not supported for recurrent policies: "
                 "the hidden state has no explicit symmetry transform."
@@ -113,7 +120,6 @@ class PPO:
         self._raw_actor = self.actor
         self._raw_critic = self.critic
 
-        # Hidden 2-D weights use Muon when use_muon=True; biases, std, and input/output layers stay on AdamW.
         self.optimizer = build_optimizer(
             [self.actor, self.critic],
             learning_rate=learning_rate,
@@ -326,9 +332,9 @@ class PPO:
                     param_group["lr"] = self.learning_rate
 
         # Surrogate loss
-        ratio = torch.exp(actions_log_prob - torch.squeeze(minibatch.old_actions_log_prob))  # type: ignore
-        surrogate = -torch.squeeze(minibatch.advantages) * ratio  # type: ignore
-        surrogate_clipped = -torch.squeeze(minibatch.advantages) * torch.clamp(  # type: ignore
+        ratio = torch.exp(actions_log_prob - minibatch.old_actions_log_prob.squeeze(-1))  # type: ignore
+        surrogate = -minibatch.advantages.squeeze(-1) * ratio  # type: ignore
+        surrogate_clipped = -minibatch.advantages.squeeze(-1) * torch.clamp(  # type: ignore
             ratio, 1.0 - self.clip_param, 1.0 + self.clip_param
         )
         surrogate_loss = torch.max(surrogate, surrogate_clipped).mean()
@@ -453,9 +459,6 @@ class PPO:
         class_name = alg_cfg.pop("class_name", None)
         if cls is PPO and class_name is not None:
             alg_class = resolve_callable(class_name)  # type: ignore
-        actor_class, actor_cfg = resolve_class(cfg["actor"])
-        critic_class, critic_cfg = resolve_class(cfg["critic"])
-
         # Resolve observation groups
         default_sets = ["actor", "critic"]
         cfg["obs_groups"] = resolve_obs_groups(obs, cfg["obs_groups"], default_sets)
@@ -463,41 +466,20 @@ class PPO:
         # Resolve symmetry config if used
         alg_cfg = resolve_symmetry_config(alg_cfg, env)
 
-        # Inject wrapper-provided time-slice metadata for models that can consume it.
-        inject_obs_time_slice_map(actor_cfg, actor_class, env)
-        inject_obs_time_slice_map(critic_cfg, critic_class, env)
-
-        # Pop init_weights configs before creating models (they are not model __init__ args)
-        actor_init_weights = actor_cfg.pop("init_weights", None)
-        actor_cnn_init_weights = actor_cfg.pop("cnn_init_weights", None)
-        critic_init_weights = critic_cfg.pop("init_weights", None)
-        critic_cnn_init_weights = critic_cfg.pop("cnn_init_weights", None)
-
-        # Initialize the policy
-        actor: MLPModel = actor_class(obs, cfg["obs_groups"], "actor", env.num_actions, **actor_cfg).to(device)
+        groups = cfg["obs_groups"]
+        actor = build_model(cfg["actor"], obs, groups, "actor", env.num_actions, env, device)
         print(f"Actor Model: {actor}")
         if alg_cfg.pop("share_cnn_encoders", None):
             raise ValueError(
                 "share_cnn_encoders is no longer supported; actor and critic each build their own CNN encoder."
             )
-        critic: MLPModel = critic_class(obs, cfg["obs_groups"], "critic", 1, **critic_cfg).to(device)
+        critic = build_model(cfg["critic"], obs, groups, "critic", 1, env, device)
         print(f"Critic Model: {critic}")
 
-        # Initialize weights if configured
-        if actor_init_weights is not None:
-            actor.head.init_weights(actor_init_weights)
-            print("-" * 80)
-            print(f"Actor Head uses orthogonal init: {actor_init_weights}")
-        if critic_init_weights is not None:
-            critic.head.init_weights(critic_init_weights)
-            print(f"Critic Head uses orthogonal init: {critic_init_weights}")
-        # Initialize CNN weights if configured
-        if actor_cnn_init_weights:
-            actor.latent_adapter.cnn.init_cnn_weights()
-            print("Actor CNNs use kaiming init")
-        if critic_cnn_init_weights:
-            critic.latent_adapter.cnn.init_cnn_weights()
-            print("Critic CNNs use kaiming init")
+        init_head_weights(actor, cfg["actor"], "Actor")
+        init_head_weights(critic, cfg["critic"], "Critic")
+        init_cnn_weights(actor, cfg["actor"], "Actor")
+        init_cnn_weights(critic, cfg["critic"], "Critic")
         print("-" * 80)
 
         # Initialize the storage

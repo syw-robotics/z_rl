@@ -1,5 +1,7 @@
 """IsaacLab configuration surface for the independent model-based runner."""
 
+from __future__ import annotations
+
 from dataclasses import MISSING
 
 from isaaclab.utils import configclass
@@ -14,10 +16,12 @@ class ZRlModelBasedRunnerCfg(ZRlBaseRunnerCfg):
     critic: ZRlMLPModelCfg = MISSING
     algorithm: dict = {
         "class_name": "z_rl.algorithms.shac:SHAC",
+        "optimizer": "adam",
         "horizon": 32,
         "gamma": 0.99,
         "lam": 0.95,
         "actor_learning_rate": 2e-4,
+        "actor_weight_decay": 0.0,
         "critic_learning_rate": 2e-4,
         "critic_epochs": 5,
         "critic_minibatches": 4,
@@ -33,7 +37,9 @@ class ZRlModelBasedRunnerCfg(ZRlBaseRunnerCfg):
         "input_normalization": True,
     }
     world_model_training: dict = {
+        "optimizer": "adam",
         "learning_rate": 2e-4,
+        "weight_decay": 0.0,
         "unroll_length": 8,
         "batch_size": 2048,
         "updates_per_iteration": 10,
@@ -47,8 +53,10 @@ class ZRlModelBasedRunnerCfg(ZRlBaseRunnerCfg):
     action_noise_std: float = 0.1
     warmup_steps: int = 64
     model_warmup_iterations: int = 500
-    # Opt in only when the model and algorithm updates have static shapes and CUDA-safe operations.
+    # Default for both updates. Set either override to capture only the desired update.
     capture_updates: bool = False
+    capture_world_model_updates: bool | None = None
+    capture_policy_updates: bool | None = None
     log_interval: int = 1
     defer_env_logs: bool = False
     actor_ema_decay: float = 0.0

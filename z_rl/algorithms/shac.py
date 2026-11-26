@@ -49,33 +49,31 @@ class SHAC:
         max_grad_value=0.1,
         clip_actions=None,
         compile=False,
-        use_muon=False,
+        use_muon=False,  # Legacy override for optimizer="muon_adamw".
+        optimizer="adam",
+        actor_weight_decay=0.0,
     ):
         self.actor, self.critic, self.world_model, self.task = actor, critic, world_model, task
         self.horizon, self.gamma, self.lam = horizon, gamma, lam
         self.critic_epochs, self.critic_minibatches = critic_epochs, critic_minibatches
         self.max_grad_norm, self.max_grad_value, self.clip_actions = max_grad_norm, max_grad_value, clip_actions
-        if use_muon:
-            self.actor_optimizer = build_optimizer(
-                [actor], learning_rate=actor_learning_rate, use_muon=True, muon_adamw_weight_decay=0.0
-            )
-            self.critic_optimizer = build_optimizer(
-                [critic], learning_rate=critic_learning_rate, use_muon=True, muon_adamw_weight_decay=0.0
-            )
-            for group in self.actor_optimizer.param_groups + self.critic_optimizer.param_groups:
-                group["weight_decay"] = 0.0  # torch.optim.Muon otherwise defaults to 0.1.
-            for group in self.actor_optimizer.param_groups:
-                if "betas" in group:
-                    group["betas"] = (0.9, 0.95)
-        else:
-            self.actor_optimizer = torch.optim.Adam(actor.parameters(), lr=actor_learning_rate, betas=(0.9, 0.95))
-            self.critic_optimizer = torch.optim.Adam(critic.parameters(), lr=critic_learning_rate)
+        self.actor_optimizer = build_optimizer(
+            [actor], learning_rate=actor_learning_rate, optimizer=optimizer, use_muon=use_muon,
+            weight_decay=actor_weight_decay, muon_adamw_weight_decay=0.0,
+        )
+        self.critic_optimizer = build_optimizer(
+            [critic], learning_rate=critic_learning_rate, optimizer=optimizer, use_muon=use_muon,
+            weight_decay=0.0, muon_adamw_weight_decay=0.0,
+        )
+        for group in self.actor_optimizer.param_groups:
+            if "betas" in group:
+                group["betas"] = (0.9, 0.95)
         self.learning_rate = actor_learning_rate
         # Compile the shared tensor step, leaving rollout scheduling and replay outside.
         self._step = torch.compile(self._imagine_step) if compile else self._imagine_step
 
     def validate_capture(self):
-        raise ValueError("SHAC uses dynamic critic minibatches; select a capture-safe algorithm or disable capture_updates")
+        raise ValueError("SHAC uses dynamic critic minibatches; set capture_policy_updates=False.")
 
     def capture_config(self):
         return (self.horizon, self.gamma, self.lam, self.critic_epochs, self.critic_minibatches,

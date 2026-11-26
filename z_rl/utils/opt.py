@@ -5,7 +5,6 @@
 
 from __future__ import annotations
 
-import warnings
 from collections.abc import Sequence
 from itertools import chain
 
@@ -31,9 +30,7 @@ class OptimizerGroup(torch.optim.Optimizer):
 
         super().__init__(params=all_params, defaults={})
         self.optimizers = optimizers
-        self.param_groups = []
-        for opt in self.optimizers:
-            self.param_groups.extend(opt.param_groups)
+        self.param_groups = [group for opt in optimizers for group in opt.param_groups]
 
     @torch.no_grad()
     def step(self, closure=None):
@@ -64,85 +61,23 @@ class OptimizerGroup(torch.optim.Optimizer):
         }
 
     def load_state_dict(self, state_dict):
-        opt_states = state_dict.get("optimizers", None)
-        if opt_states is None:
-            return
+        opt_states = state_dict.get("optimizers")
+        if not isinstance(opt_states, list):
+            raise ValueError("OptimizerGroup checkpoint must contain an 'optimizers' list.")
         if len(opt_states) != len(self.optimizers):
-            warnings.warn(
-                f"OptimizerGroup state has {len(opt_states)} optimizers, "
-                f"but current instance has {len(self.optimizers)}. "
-                "Loading states for the matching prefix only."
+            raise ValueError(
+                f"OptimizerGroup checkpoint has {len(opt_states)} optimizers, "
+                f"but the current group has {len(self.optimizers)}."
             )
+        for opt, opt_state in zip(self.optimizers, opt_states):
+            saved_sizes = [len(group["params"]) for group in opt_state["param_groups"]]
+            current_sizes = [len(group["params"]) for group in opt.param_groups]
+            if saved_sizes != current_sizes:
+                raise ValueError("OptimizerGroup checkpoint parameter groups do not match the current optimizer.")
         for opt, opt_state in zip(self.optimizers, opt_states):
             opt.load_state_dict(opt_state)
         # Loading replaces the wrapped optimizers' parameter-group dictionaries.
         self.param_groups = [group for opt in self.optimizers for group in opt.param_groups]
-
-
-class MuonAdamWWrapper(OptimizerGroup):
-    """Split parameters between Muon (hidden 2-D weights) and AdamW (everything else).
-
-    Muon is not a drop-in replacement for Adam/AdamW. In typical usage, only hidden-layer
-    ``Linear.weight`` tensors (2-D, square-ish matrices) are optimized with Muon; biases,
-    normalization parameters, policy std heads, and input/output linear layers stay on AdamW.
-
-    Parameter routing:
-
-    - 2-D weights without ``_non_muon`` -> ``torch.optim.Muon``
-    - all other parameters (1-D biases/std, marked 2-D heads, etc.) -> ``torch.optim.AdamW``
-
-    Models can mark specific weights with ``param._non_muon = True`` (see :class:`z_rl.modules.MLP`)
-    to keep them on AdamW even when they are 2-D.
-
-    Requires a PyTorch build that exposes ``torch.optim.Muon`` (approximately 2.9+).
-    """
-
-    def __init__(
-        self,
-        modules: list[torch.nn.Module],
-        lr: float,
-        weight_decay: float = 0.01,
-        ignore_frozen: bool = True,
-    ):
-        if not hasattr(torch.optim, "Muon"):
-            raise RuntimeError(
-                "use_muon=True requires a PyTorch build with torch.optim.Muon. "
-                "Upgrade PyTorch or set use_muon=False."
-            )
-
-        seen: set[int] = set()
-        muon_params: list[torch.nn.Parameter] = []
-        adamw_params: list[torch.nn.Parameter] = []
-        for module in modules:
-            for _, param in module.named_parameters():
-                if id(param) in seen:
-                    continue
-                if ignore_frozen and not param.requires_grad:
-                    continue
-                seen.add(id(param))
-                # Muon only applies to hidden 2-D weights; everything else uses AdamW.
-                if param.dim() == 2 and not getattr(param, "_non_muon", False):
-                    muon_params.append(param)
-                else:
-                    adamw_params.append(param)
-
-        optimizers: list[torch.optim.Optimizer] = []
-        if len(muon_params) > 0:
-            muon = torch.optim.Muon(muon_params, lr=lr, adjust_lr_fn="match_rms_adamw")
-            optimizers.append(muon)
-        if len(adamw_params) > 0:
-            try:
-                adamw = torch.optim.AdamW(adamw_params, lr=lr, weight_decay=weight_decay, fused=True)
-            except TypeError:
-                adamw = torch.optim.AdamW(adamw_params, lr=lr, weight_decay=weight_decay)
-            optimizers.append(adamw)
-        if len(optimizers) == 0:
-            raise ValueError(
-                "MuonAdamWWrapper: no parameters were assigned to Muon or AdamW. "
-                "With ignore_frozen=True, every parameter may have requires_grad=False; "
-                "unfreeze at least some weights or pass ignore_frozen=False."
-            )
-        super().__init__(optimizers)
 
 
 def build_optimizer(
@@ -152,13 +87,40 @@ def build_optimizer(
     optimizer: str = "adam",
     use_muon: bool = False,
     muon_adamw_weight_decay: float = 0.01,
+    weight_decay: float | None = None,
 ) -> torch.optim.Optimizer:
-    """Build the optimizer shared by PPO and distillation.
+    """Use the named optimizer, or split trainable parameters between Muon and AdamW.
 
-    When ``use_muon`` is enabled, hidden 2-D weights go to Muon and the remaining parameters stay on AdamW.
-    The named ``optimizer`` is ignored in that case. Otherwise every parameter of ``modules`` uses that optimizer.
+    With ``optimizer="muon_adamw"``, Muon takes 2-D parameters unless the model marks them
+    with ``_non_muon``. ``weight_decay`` applies to the named optimizer or the Muon half
+    of the split. The AdamW half uses ``muon_adamw_weight_decay``. The legacy ``use_muon=True`` flag still overrides the optimizer name.
     """
     if use_muon:
-        return MuonAdamWWrapper(list(modules), lr=learning_rate, weight_decay=muon_adamw_weight_decay)
+        optimizer = "muon_adamw"
     params = chain.from_iterable(module.parameters() for module in modules)
-    return resolve_optimizer(optimizer)(params, lr=learning_rate)
+    decay = {} if weight_decay is None else {"weight_decay": weight_decay}
+    if optimizer.lower() != "muon_adamw":
+        return resolve_optimizer(optimizer)(params, lr=learning_rate, **decay)
+    if not hasattr(torch.optim, "Muon"):
+        raise RuntimeError('optimizer="muon_adamw" requires a PyTorch build with torch.optim.Muon.')
+
+    muon_params: list[nn.Parameter] = []
+    adamw_params: list[nn.Parameter] = []
+    for param in dict.fromkeys(params):
+        if not param.requires_grad:
+            continue
+        if param.ndim == 2 and not getattr(param, "_non_muon", False):
+            muon_params.append(param)
+        else:
+            adamw_params.append(param)
+    if not (muon_params or adamw_params):
+        raise ValueError('optimizer="muon_adamw" requires at least one trainable parameter.')
+
+    optimizers: list[torch.optim.Optimizer] = []
+    if muon_params:
+        optimizers.append(torch.optim.Muon(muon_params, lr=learning_rate, adjust_lr_fn="match_rms_adamw", **decay))
+    if adamw_params:
+        optimizers.append(
+            torch.optim.AdamW(adamw_params, lr=learning_rate, weight_decay=muon_adamw_weight_decay, fused=True)
+        )
+    return OptimizerGroup(optimizers)

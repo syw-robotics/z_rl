@@ -2,7 +2,6 @@
 
 import torch
 from torch import nn
-from torch.optim._muon import _adjust_lr, _zeropower_via_newtonschulz
 
 from ..opt import OptimizerGroup
 
@@ -17,38 +16,26 @@ def clip_grad_norm(parameters, max_norm):
     return norm
 
 
-class TensorLRMuon(torch.optim.Muon):
-    """Native Muon update with a device LR; native step converts tensor LR to a scalar."""
-
-    @torch.no_grad()
-    def step(self, closure=None):
-        if closure is not None:
-            raise ValueError("Captured Muon does not support closures")
-        for group in self.param_groups:
-            params, grads, buffers = [], [], []
-            self._init_group(group, params, grads, buffers)
-            for param, grad, buffer in zip(params, grads, buffers):
-                buffer.lerp_(grad, 1 - group["momentum"])
-                update = grad.lerp(buffer, group["momentum"]) if group["nesterov"] else buffer
-                update = _zeropower_via_newtonschulz(update, group["ns_coefficients"], group["ns_steps"], group["eps"])
-                lr = _adjust_lr(group["lr"], group["adjust_lr_fn"], param.shape)
-                param.mul_(1 - group["lr"] * group["weight_decay"])
-                param.add_(-lr * update.to(param.dtype))
-
-
 def make_capturable(optimizer):
-    """Call before training; preserve Muon/AdamW routing and checkpoint structure."""
+    """Prepare an optimizer for capture before training or after loading a checkpoint."""
     if isinstance(optimizer, OptimizerGroup):
         optimizer.optimizers = [make_capturable(opt) for opt in optimizer.optimizers]
         optimizer.param_groups = [group for opt in optimizer.optimizers for group in opt.param_groups]
         return optimizer
-    if isinstance(optimizer, torch.optim.Muon):
-        native = optimizer
-        optimizer = TensorLRMuon(native.param_groups)
-        optimizer.load_state_dict(native.state_dict())
-    elif isinstance(optimizer, (torch.optim.AdamW, torch.optim.Adam)):
+    if isinstance(optimizer, (torch.optim.AdamW, torch.optim.Adam)):
         for group in optimizer.param_groups:
-            group.update(capturable=True, fused=True)
+            group.update(capturable=True, fused=True, foreach=False)
+        # Eager Adam checkpoints can have CPU step counters.
+        for param, state in optimizer.state.items():
+            if "step" in state:
+                state["step"] = state["step"].to(device=param.device, dtype=torch.float32)
+    elif isinstance(optimizer, getattr(torch.optim, "Muon", ())):
+        from .muon import TensorLRMuon
+
+        if not isinstance(optimizer, TensorLRMuon):
+            native = optimizer
+            optimizer = TensorLRMuon(native.param_groups)
+            optimizer.load_state_dict(native.state_dict())
     else:
         raise TypeError(f"Unsupported captured optimizer: {type(optimizer).__name__}")
     for group in optimizer.param_groups:

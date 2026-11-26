@@ -373,19 +373,14 @@ class ZRlPpoAlgorithmCfg:
     max_grad_norm: float = MISSING
     """The maximum gradient norm."""
 
-    optimizer: Literal["adam", "adamw", "sgd", "rmsprop"] = "adam"
-    """The optimizer to use. Defaults to adam."""
+    optimizer: Literal["adam", "adamw", "sgd", "rmsprop", "muon_adamw"] = "adam"
+    """Optimizer to use. ``"muon_adamw"`` splits eligible 2-D weights from the remaining parameters."""
 
     use_muon: bool = False
-    """Whether to use Muon+AdamW instead of a single optimizer. Defaults to False.
-
-    Muon is intended for hidden 2-D weight matrices only. Biases, normalization parameters,
-    policy std heads, and input/output linear layers remain on AdamW. Requires a PyTorch build
-    that provides ``torch.optim.Muon`` (approximately 2.9+). When enabled, ``optimizer`` is ignored.
-    """
+    """Legacy flag. When True, selects ``"muon_adamw"`` regardless of ``optimizer``."""
 
     muon_adamw_weight_decay: float = 0.01
-    """AdamW weight decay used by the non-Muon parameter group when ``use_muon`` is enabled."""
+    """Weight decay for the AdamW group in ``"muon_adamw"``."""
 
     value_loss_coef: float = MISSING
     """The coefficient for the value loss."""
@@ -530,18 +525,9 @@ class ZRlBaseRunnerCfg:
     .. note::
         This clipping is performed inside the :class:`ZRlVecEnvWrapper` wrapper.
     """
-
-    obs_group_concat_mode: Literal["term_major", "history_major"] = "term_major"
-    """Concatenation layout for dict-based observation groups. Defaults to ``"term_major"``.
-
-    - ``"term_major"``: Concatenate each term as-is in term order (Isaac Lab default layout).
-    - ``"history_major"``: Reorder compatible vector history terms into a history-major flat layout.
-
-    .. note::
-        ``"history_major"`` only applies to compatible dict observation groups and requires
-        ``concatenate_terms=False`` in Isaac Lab's observation group configuration.
-        Incompatible groups will fall back to term-major behavior.
-    """
+    
+    compute_command_metric_interval: int = 10
+    """The number of iterations between computing the command metric."""
 
     check_for_nan: bool = False
     """Whether to check for NaN values coming from the environment."""

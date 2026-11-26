@@ -7,13 +7,16 @@
 
 from __future__ import annotations
 
+import copy
 import torch
 from collections.abc import Iterator
 from tensordict import TensorDict
 
+import pytest
+
 from tests.conftest import make_obs
 from z_rl.algorithms.ppo import PPO
-from z_rl.models import MLPModel
+from z_rl.models import MLPModel, RNNModel
 from z_rl.storage import RolloutStorage
 
 NUM_ENVS = 4
@@ -129,10 +132,29 @@ def test_symmetry_augmentation_is_the_authoritative_rollout_switch() -> None:
 def test_muon_adamw_weight_decay_is_forwarded() -> None:
     if not hasattr(torch.optim, "Muon"):
         return
-    ppo, _ = _build_ppo(use_muon=True, muon_adamw_weight_decay=0.123)
+    ppo, _ = _build_ppo(optimizer="muon_adamw", muon_adamw_weight_decay=0.123)
     adamw = next(optimizer for optimizer in ppo.optimizer.optimizers if isinstance(optimizer, torch.optim.AdamW))
 
     assert adamw.defaults["weight_decay"] == 0.123
+
+
+@pytest.mark.parametrize("num_mini_batches", [0, -1, 3, 64])
+def test_invalid_minibatch_count_is_rejected_at_init(num_mini_batches: int) -> None:
+    """The 32-transition rollout must split into equally sized minibatches."""
+    with pytest.raises(ValueError, match="num_mini_batches"):
+        _build_ppo(num_mini_batches=num_mini_batches)
+
+
+def test_recurrent_minibatches_must_divide_env_count() -> None:
+    """Four batches divide 24 transitions, but cannot evenly partition six recurrent environments."""
+    obs = make_obs(6, OBS_DIM)
+    groups = {"actor": ["policy"], "critic": ["policy"]}
+    actor = _make_actor(obs, groups)
+    storage = RolloutStorage("rl", 6, 4, obs, [NUM_ACTIONS])
+    PPO(actor, _make_critic(obs, groups), storage, num_mini_batches=4)
+    critic = RNNModel(obs, groups, "critic", 1, hidden_dims=[8], rnn_hidden_dim=8)
+    with pytest.raises(ValueError, match="num_envs"):
+        PPO(actor, critic, storage, num_mini_batches=4)
 
 
 class TestMirrorMetricScheduling:
@@ -198,7 +220,14 @@ class TestGAEComputation:
         critic = _make_critic(obs, obs_groups)
         storage = RolloutStorage("rl", num_envs, num_steps, obs, [NUM_ACTIONS])
         ppo = PPO(
-            actor, critic, storage, gamma=gamma, lam=lam, schedule="fixed", normalize_advantage_per_mini_batch=True
+            actor,
+            critic,
+            storage,
+            num_mini_batches=1,
+            gamma=gamma,
+            lam=lam,
+            schedule="fixed",
+            normalize_advantage_per_mini_batch=True,
         )
 
         rewards = [1.0, 2.0, 3.0]
@@ -262,7 +291,14 @@ class TestGAEComputation:
         critic = _make_critic(obs, obs_groups)
         storage = RolloutStorage("rl", num_envs, num_steps, obs, [NUM_ACTIONS])
         ppo = PPO(
-            actor, critic, storage, gamma=gamma, lam=lam, schedule="fixed", normalize_advantage_per_mini_batch=True
+            actor,
+            critic,
+            storage,
+            num_mini_batches=1,
+            gamma=gamma,
+            lam=lam,
+            schedule="fixed",
+            normalize_advantage_per_mini_batch=True,
         )
 
         # Step 0: done=True, so step 1 is a fresh episode
@@ -346,6 +382,59 @@ class TestTimeoutBootstrapping:
 
 class TestPPOLosses:
     """Tests for PPO loss computation correctness."""
+
+    def test_recurrent_surrogate_matches_per_transition_objective(self) -> None:
+        """A recurrent minibatch must pair each action with its own old probability and advantage."""
+        torch.manual_seed(7)
+        num_envs = 1
+        obs = make_obs(num_envs, 3)
+        obs_groups = {"actor": ["policy"], "critic": ["policy"]}
+        rnn_cfg = {"hidden_dims": [8], "rnn_hidden_dim": 8, "rnn_type": "gru"}
+        actor = RNNModel(
+            obs, obs_groups, "actor", 2, distribution_cfg={"class_name": "GaussianDistribution"}, **rnn_cfg
+        )
+        critic = RNNModel(obs, obs_groups, "critic", 1, **rnn_cfg)
+        storage = RolloutStorage("rl", num_envs, 6, obs, [2])
+        ppo = PPO(
+            actor,
+            critic,
+            storage,
+            num_learning_epochs=1,
+            num_mini_batches=1,
+            schedule="fixed",
+            learning_rate=0.0,
+            value_loss_coef=0.0,
+            entropy_coef=0.0,
+            max_grad_norm=1e6,
+        )
+        with torch.inference_mode():
+            for step in range(storage.num_transitions_per_env):
+                ppo.act(obs)
+                obs = make_obs(num_envs, 3)
+                dones = torch.full((num_envs,), step == 2)
+                ppo.process_env_step(obs, torch.randn(num_envs), dones, {})
+            ppo.compute_returns(obs)
+
+        reference = copy.deepcopy(actor)
+        batch = next(storage.recurrent_mini_batch_generator(1, 1))
+        reference(batch.observations, masks=batch.masks, hidden_state=batch.hidden_states[0], stochastic_output=True)
+        log_prob = (
+            torch.distributions.Normal(reference.output_mean, reference.output_std)
+            .log_prob(batch.actions)
+            .sum(-1)
+            .flatten()
+        )
+        ratios = (log_prob - batch.old_actions_log_prob.flatten()).exp()
+        advantages = batch.advantages.flatten().clone()
+        expected_loss = -torch.minimum(
+            ratios * advantages, ratios.clamp(1.0 - ppo.clip_param, 1.0 + ppo.clip_param) * advantages
+        ).mean()
+        expected_loss.backward()
+
+        losses = ppo.update()
+        torch.testing.assert_close(losses["surrogate_loss"], expected_loss.detach())
+        for actual, expected in zip(actor.parameters(), reference.parameters()):
+            torch.testing.assert_close(actual.grad, expected.grad)
 
     def test_update_reports_policy_and_value_diagnostics(self) -> None:
         """Diagnostics should be finite even when KL scheduling is disabled."""

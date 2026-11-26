@@ -182,9 +182,9 @@ class MLPModel(nn.Module):
         return self.distribution.mean
 
     @property
-    def output_std(self) -> torch.Tensor:
-        """Return the standard deviation of the current output distribution."""
-        return self.distribution.std
+    def output_std(self) -> torch.Tensor | None:
+        """Return the output standard deviation, or None if no distribution is configured."""
+        return None if self.distribution is None else self.distribution.std
 
     @property
     def output_entropy(self) -> torch.Tensor:
